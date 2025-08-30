@@ -1,3 +1,4 @@
+pub mod blob_detector;
 pub mod chunk;
 pub mod grid_manager;
 pub mod pixel;
