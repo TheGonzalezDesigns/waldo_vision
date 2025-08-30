@@ -21,7 +21,7 @@
 //     instance, feed it raw frames, and receive a high-level stream of events
 //     (e.g., "Moment Started," "Moment Completed").
 
-use crate::core_modules::smart_blob::smart_blob::SmartBlob;
+use crate::core_modules::smart_blob::SmartBlob;
 use crate::core_modules::tracker::{TrackedBlob, Tracker};
 use std::collections::HashSet;
 
