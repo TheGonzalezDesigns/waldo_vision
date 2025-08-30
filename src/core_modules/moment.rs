@@ -80,13 +80,14 @@ impl SceneManager {
         }
     }
 
-    /// The main entry point for the behavioral layer.
     /// Processes the latest blobs, updates the tracker, and manages moment lifecycles.
-    pub fn update(&mut self, blobs: Vec<SmartBlob>) {
+    /// Returns a tuple of (newly_started_moments, newly_completed_moments).
+    pub fn update(&mut self, blobs: Vec<SmartBlob>) -> (Vec<Moment>, Vec<Moment>) {
         self.frame_count += 1;
         let tracked_blobs = self.tracker.update(blobs);
 
         let mut current_tracked_ids = HashSet::new();
+        let mut newly_started_moments = Vec::new();
 
         // Update active moments and identify new ones.
         for tracked_blob in tracked_blobs {
@@ -101,14 +102,15 @@ impl SceneManager {
                 active_moment.update(tracked_blob, self.frame_count);
             } else {
                 // This is a new blob birth. Create a new active moment.
-                self.active_moments
-                    .push(Moment::new(tracked_blob, self.frame_count));
+                let new_moment = Moment::new(tracked_blob, self.frame_count);
+                newly_started_moments.push(new_moment.clone());
+                self.active_moments.push(new_moment);
             }
         }
 
         // Handle completed moments (deaths).
         let mut still_active = Vec::new();
-        let mut just_completed = Vec::new();
+        let mut newly_completed_moments = Vec::new();
 
         for mut moment in self.active_moments.drain(..) {
             if current_tracked_ids.contains(&moment.id) {
@@ -117,12 +119,13 @@ impl SceneManager {
             } else {
                 // The moment's track was lost. It is now complete.
                 moment.complete();
-                just_completed.push(moment);
+                newly_completed_moments.push(moment.clone());
+                self.completed_moments.push(moment);
             }
         }
 
         self.active_moments = still_active;
-        self.completed_moments.extend(just_completed);
+        (newly_started_moments, newly_completed_moments)
     }
 
     /// Provides a view into the moments that are currently in progress.
