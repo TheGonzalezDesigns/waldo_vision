@@ -24,6 +24,7 @@ pub mod pixel {
 
     const CHANNELS: usize = 4;
 
+    #[derive(Debug, Clone, PartialEq)]
     pub struct Pixel {
         pub red: Channel,
         pub green: Channel,

@@ -26,8 +26,8 @@
 //     function takes a status map for a single frame and produces a list of blobs
 //     for that same frame. It has no memory of previous frames.
 
-use crate::core_modules::smart_blob::smart_blob::{Point, SmartBlob};
-use crate::core_modules::smart_chunk::smart_chunk::{AnomalyDetails, ChunkStatus};
+use crate::core_modules::smart_blob::{Point, SmartBlob};
+use crate::core_modules::smart_chunk::{AnomalyDetails, ChunkStatus};
 
 pub mod blob_detector {
     use super::*; // Make structs from parent module available.

@@ -25,7 +25,7 @@
 
 use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::pixel::pixel::Pixel;
-use crate::core_modules::smart_chunk::smart_chunk::{ChunkStatus, SmartChunk};
+use crate::core_modules::smart_chunk::{ChunkStatus, SmartChunk};
 
 pub struct GridManager {
     image_width: u32,
