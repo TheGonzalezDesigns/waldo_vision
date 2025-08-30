@@ -87,7 +87,7 @@ impl GridManager {
                 let pixel_x = start_pixel_x + x_offset;
 
                 let byte_index = ((pixel_y * self.image_width) + pixel_x) * 4;
-                
+
                 let pixel_bytes = &frame_buffer[byte_index as usize..(byte_index + 4) as usize];
                 chunk_pixels.push(Pixel::from(pixel_bytes));
             }
