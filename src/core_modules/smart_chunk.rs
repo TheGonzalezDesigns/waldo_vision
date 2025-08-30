@@ -23,7 +23,7 @@
 use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::pixel::pixel::Pixel;
 use crate::core_modules::smart_pixel::smart_pixel::{
-    ColorDelta, HueDifference, LuminanceDelta, SmartPixel,
+    HueDifference, LuminanceDelta, SmartPixel,
 };
 use std::collections::VecDeque;
 
