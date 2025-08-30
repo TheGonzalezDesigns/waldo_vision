@@ -44,6 +44,8 @@ fn main() -> opencv::Result<()> {
         chunk_height: 10,
         min_moment_age_for_significance: 5,
         significance_threshold: 3.0,
+        absolute_min_blob_size: 2, // A blob must be at least 2 chunks to be considered.
+        blob_size_std_dev_filter: 2.0, // Filter blobs 2 std devs below the mean size.
     };
     let mut pipeline = VisionPipeline::new(config.clone());
 
