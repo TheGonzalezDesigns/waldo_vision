@@ -26,10 +26,14 @@
 use crate::core_modules::blob_detector::blob_detector;
 use crate::core_modules::grid_manager::GridManager;
 use crate::core_modules::moment::SceneManager;
+use crate::core_modules::smart_blob::SmartBlob;
+use std::collections::VecDeque;
 
 // Re-export key data structures for the public API.
 pub use crate::core_modules::moment::Moment;
 pub use crate::core_modules::smart_chunk::{AnomalyDetails, ChunkStatus};
+
+const BLOB_SIZE_HISTORY_LENGTH: usize = 100; // Keep a history of the last 100 blob sizes.
 
 /// Configuration for the VisionPipeline, allowing for tunable behavior.
 #[derive(Debug, Clone)]
@@ -43,6 +47,10 @@ pub struct PipelineConfig {
     pub min_moment_age_for_significance: u32,
     /// The `BlobDetector` needs a threshold for anomaly scores.
     pub significance_threshold: f64,
+    /// The absolute minimum number of chunks a blob must have to be considered.
+    pub absolute_min_blob_size: usize,
+    /// The number of standard deviations below the mean size to filter out a blob.
+    pub blob_size_std_dev_filter: f64,
 }
 
 /// The detailed data package for a significant event.
@@ -67,6 +75,7 @@ pub struct VisionPipeline {
     scene_manager: SceneManager,
     config: PipelineConfig,
     last_status_map: Vec<ChunkStatus>,
+    blob_size_history: VecDeque<usize>,
 }
 
 impl VisionPipeline {
@@ -84,6 +93,7 @@ impl VisionPipeline {
             scene_manager: SceneManager::new(),
             config,
             last_status_map: vec![ChunkStatus::Learning; num_chunks as usize],
+            blob_size_history: VecDeque::with_capacity(BLOB_SIZE_HISTORY_LENGTH),
         }
     }
 
@@ -99,14 +109,17 @@ impl VisionPipeline {
         self.last_status_map = self.grid_manager.process_frame(frame_buffer);
 
         // Stage 2: Spatial Grouping
-        let blobs = blob_detector::find_blobs(
+        let raw_blobs = blob_detector::find_blobs(
             &self.last_status_map,
             self.config.image_width / self.config.chunk_width,
             self.config.image_height / self.config.chunk_height,
         );
 
+        // Stage 2.5: Production-Ready Blob Filtering
+        let filtered_blobs = self.filter_blobs(raw_blobs);
+
         // Stage 3: Behavioral Analysis
-        let (newly_started, newly_completed) = self.scene_manager.update(blobs);
+        let (newly_started, newly_completed) = self.scene_manager.update(filtered_blobs);
 
         // Stage 4: Final Decision Logic
         let new_significant_moments: Vec<Moment> = newly_started
@@ -129,6 +142,52 @@ impl VisionPipeline {
                 completed_significant_moments,
             })
         }
+    }
+
+    /// Applies a multi-stage filtering process to raw blobs to remove noise.
+    fn filter_blobs(&mut self, blobs: Vec<SmartBlob>) -> Vec<SmartBlob> {
+        // Calculate statistics from our recent history.
+        let (mean, std_dev) = {
+            if self.blob_size_history.is_empty() {
+                (0.0, 0.0)
+            } else {
+                let sum: usize = self.blob_size_history.iter().sum();
+                let mean = sum as f64 / self.blob_size_history.len() as f64;
+                let variance = self.blob_size_history.iter()
+                    .map(|value| (*value as f64 - mean).powi(2))
+                    .sum::<f64>() / self.blob_size_history.len() as f64;
+                (mean, variance.sqrt())
+            }
+        };
+
+        let mut filtered_blobs = Vec::new();
+        for blob in blobs {
+            // Stage 1: Absolute Minimum Filter
+            if blob.size_in_chunks < self.config.absolute_min_blob_size {
+                continue;
+            }
+
+            // Stage 2: Statistical Outlier Filter
+            if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH / 2 { // Wait for some history
+                let threshold = mean - self.config.blob_size_std_dev_filter * std_dev;
+                if (blob.size_in_chunks as f64) < threshold {
+                    continue;
+                }
+            }
+
+            // If the blob passed all filters, add it to the list.
+            filtered_blobs.push(blob);
+        }
+
+        // Update the history with the sizes of the blobs that passed the filter.
+        for blob in &filtered_blobs {
+            if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH {
+                self.blob_size_history.pop_front();
+            }
+            self.blob_size_history.push_back(blob.size_in_chunks);
+        }
+
+        filtered_blobs
     }
 
     /// Analyzes a moment based on the pipeline's configuration to determine if it's significant.
