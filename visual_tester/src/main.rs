@@ -131,11 +131,28 @@ fn draw_heatmap(
 
         let color = match status {
             ChunkStatus::Stable => Scalar::new(0.0, 0.0, 0.0, 0.0), // Transparent
-            ChunkStatus::PredictableMotion => Scalar::new(255.0, 0.0, 0.0, 100.0), // Blue
+            ChunkStatus::PredictableMotion => Scalar::new(255.0, 0.0, 0.0, 100.0), // Semi-transparent Blue
             ChunkStatus::AnomalousEvent(details) => {
-                // Red, with intensity based on significance
-                let intensity = (details.luminance_score.clamp(0.0, 10.0) * 25.5);
-                Scalar::new(0.0, 0.0, 255.0, intensity)
+                // Map the significance score to a Blue -> Yellow -> Red gradient.
+                let score = details.luminance_score.clamp(0.0, 10.0);
+                let r: f64;
+                let g: f64;
+                let b: f64;
+
+                if score <= 5.0 {
+                    // Blue to Yellow gradient
+                    let ratio = score / 5.0;
+                    b = 255.0 * (1.0 - ratio);
+                    g = 255.0 * ratio;
+                    r = 0.0;
+                } else {
+                    // Yellow to Red gradient
+                    let ratio = (score - 5.0) / 5.0;
+                    b = 0.0;
+                    g = 255.0 * (1.0 - ratio);
+                    r = 255.0 * ratio;
+                }
+                Scalar::new(b, g, r, 150.0) // Semi-transparent
             }
             _ => Scalar::new(0.0, 0.0, 0.0, 0.0),
         };
