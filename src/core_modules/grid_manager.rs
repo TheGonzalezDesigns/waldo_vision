@@ -44,10 +44,11 @@ impl GridManager {
         let num_chunks = (grid_width * grid_height) as usize;
         let mut smart_chunks = Vec::with_capacity(num_chunks);
 
-        for y in 0..grid_height {
-            for x in 0..grid_width {
-                smart_chunks.push(SmartChunk::new(x, y));
-            }
+        // Use a single, flattened loop for consistency with the processing logic.
+        for i in 0..num_chunks {
+            let y = i as u32 / grid_width;
+            let x = i as u32 % grid_width;
+            smart_chunks.push(SmartChunk::new(x, y));
         }
 
         Self {
@@ -75,24 +76,20 @@ impl GridManager {
             let mut chunk_pixels =
                 Vec::with_capacity((self.chunk_width * self.chunk_height) as usize);
 
-            // Iterate over each row of pixels within the current chunk.
-            for y_offset in 0..self.chunk_height {
-                let current_row = start_pixel_y + y_offset;
-                // Calculate the starting byte index for the current row in the main image buffer.
-                let row_start_byte_index = (current_row * self.image_width * 4) as usize;
+            // This is the optimized, single flattened loop for extracting pixels for a chunk.
+            // It iterates through each pixel position within the chunk's boundaries and calculates
+            // its exact index in the main frame_buffer, avoiding intermediate row-based slices.
+            for i in 0..(self.chunk_width * self.chunk_height) {
+                let y_offset = i / self.chunk_width;
+                let x_offset = i % self.chunk_width;
 
-                // Calculate the starting and ending byte indices for the pixels of this chunk in the current row.
-                let row_pixel_start_byte_index =
-                    row_start_byte_index + (start_pixel_x * 4) as usize;
-                let row_pixel_end_byte_index =
-                    row_pixel_start_byte_index + (self.chunk_width * 4) as usize;
+                let pixel_y = start_pixel_y + y_offset;
+                let pixel_x = start_pixel_x + x_offset;
 
-                // Get a slice of the bytes for the current row segment.
-                let row_bytes = &frame_buffer[row_pixel_start_byte_index..row_pixel_end_byte_index];
-
-                // Convert the byte slice into a Vec<Pixel>.
-                // The `chunks_exact` method is a highly efficient way to group bytes into RGBA pixels.
-                chunk_pixels.extend(row_bytes.chunks_exact(4).map(|rgba| Pixel::from(rgba)));
+                let byte_index = ((pixel_y * self.image_width) + pixel_x) * 4;
+                
+                let pixel_bytes = &frame_buffer[byte_index as usize..(byte_index + 4) as usize];
+                chunk_pixels.push(Pixel::from(pixel_bytes));
             }
 
             let chunk_data = Chunk::new(self.chunk_width, self.chunk_height, chunk_pixels);
