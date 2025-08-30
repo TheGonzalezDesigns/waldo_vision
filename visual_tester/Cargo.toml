@@ -1,0 +1,8 @@
+[package]
+name = "visual_tester"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+waldo_vision = { path = "../waldo_vision" }
+opencv = "0.88.8"

@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "waldo_vision",
+    "visual_tester",
+]
+
+[workspace.dependencies]
+# We can define shared dependencies here later if needed.
