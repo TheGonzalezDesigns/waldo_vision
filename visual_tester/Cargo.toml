@@ -5,4 +5,4 @@ edition = "2024"
 
 [dependencies]
 waldo_vision = { path = "../waldo_vision" }
-opencv = "0.88.8"
+opencv = { version = "0.88.8", default-features = false, features = ["videoio", "highgui", "imgproc"] }

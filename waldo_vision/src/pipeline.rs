@@ -25,19 +25,23 @@
 
 use crate::core_modules::blob_detector::blob_detector;
 use crate::core_modules::grid_manager::GridManager;
-use crate::core_modules::moment::{Moment, SceneManager};
+use crate::core_modules::moment::SceneManager;
+
+// Re-export key data structures for the public API.
+pub use crate::core_modules::moment::Moment;
+pub use crate::core_modules::smart_chunk::{AnomalyDetails, ChunkStatus};
 
 /// Configuration for the VisionPipeline, allowing for tunable behavior.
 #[derive(Debug, Clone)]
 pub struct PipelineConfig {
-    // The `GridManager` needs to know the full image dimensions to work correctly.
+    /// The `GridManager` needs to know the full image dimensions to work correctly.
     pub image_width: u32,
     pub image_height: u32,
     pub chunk_width: u32,
     pub chunk_height: u32,
-    // The `Tracker` needs a threshold for filtering out fleeting moments.
+    /// The `Tracker` needs a threshold for filtering out fleeting moments.
     pub min_moment_age_for_significance: u32,
-    // The `BlobDetector` needs a threshold for anomaly scores.
+    /// The `BlobDetector` needs a threshold for anomaly scores.
     pub significance_threshold: f64,
 }
 
@@ -62,6 +66,7 @@ pub struct VisionPipeline {
     grid_manager: GridManager,
     scene_manager: SceneManager,
     config: PipelineConfig,
+    last_status_map: Vec<ChunkStatus>,
 }
 
 impl VisionPipeline {
@@ -73,10 +78,12 @@ impl VisionPipeline {
             config.chunk_width,
             config.chunk_height,
         );
+        let num_chunks = (config.image_width / config.chunk_width) * (config.image_height / config.chunk_height);
         Self {
             grid_manager,
             scene_manager: SceneManager::new(),
             config,
+            last_status_map: vec![ChunkStatus::Learning; num_chunks as usize],
         }
     }
 
@@ -89,11 +96,11 @@ impl VisionPipeline {
     /// Processes a frame and returns a detailed report of all significant events.
     pub fn generate_report(&mut self, frame_buffer: &[u8]) -> Report {
         // Stage 1: Temporal Analysis
-        let status_map = self.grid_manager.process_frame(frame_buffer);
+        self.last_status_map = self.grid_manager.process_frame(frame_buffer);
 
         // Stage 2: Spatial Grouping
         let blobs = blob_detector::find_blobs(
-            &status_map,
+            &self.last_status_map,
             self.config.image_width / self.config.chunk_width,
             self.config.image_height / self.config.chunk_height,
         );
@@ -138,5 +145,10 @@ impl VisionPipeline {
             .blob_history
             .iter()
             .any(|blob| blob.average_anomaly.luminance_score >= self.config.significance_threshold)
+    }
+
+    /// Returns a slice of the ChunkStatus map from the most recently processed frame.
+    pub fn get_last_status_map(&self) -> &[ChunkStatus] {
+        &self.last_status_map
     }
 }
