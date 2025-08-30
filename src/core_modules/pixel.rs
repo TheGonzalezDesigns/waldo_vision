@@ -1,12 +1,14 @@
-mod pixel {
-    type Byte = u8;
-    type Bytes = Vec<Byte>;
-    type Channel = Byte;
-    type Luminance = f64;
+pub mod pixel {
+    pub type Byte = u8;
+    pub type Bytes = Vec<Byte>;
+    pub type Channel = Byte;
+    pub type Luminance = f64;
+    pub type Color = i16;
+    pub type Sum = f32;
 
     const CHANNELS: usize = 4;
 
-    struct Pixel {
+    pub struct Pixel {
         pub red: Channel,
         pub green: Channel,
         pub blue: Channel,
@@ -36,6 +38,22 @@ mod pixel {
 
         pub fn luminance(&self) -> Luminance {
             0.299 * self.red as f64 + 0.587 * self.green as f64 + 0.114 * self.blue as f64
+        }
+
+        pub fn sum(&self) -> Sum {
+            (self.red as Color + self.green as Color + self.blue as Color) as Sum
+        }
+
+        pub fn color_ratios(&self) -> (f32, f32, f32) {
+            let sum = self.sum();
+            if sum == 0.0 {
+                return (0.0, 0.0, 0.0);
+            }
+            (
+                self.red as f32 / sum,
+                self.green as f32 / sum,
+                self.blue as f32 / sum,
+            )
         }
     }
 
