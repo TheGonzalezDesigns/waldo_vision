@@ -22,9 +22,13 @@
 pub mod chunk {
     use crate::core_modules::pixel::pixel::Pixel;
 
+    /// A "dumb" data container representing a rectangular block of pixels.
     pub struct Chunk {
+        /// The width of the chunk in pixels.
         pub width: u32,
+        /// The height of the chunk in pixels.
         pub height: u32,
+        /// A flattened vector containing all the `Pixel` data within this chunk.
         pub pixels: Vec<Pixel>,
     }
 

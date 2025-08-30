@@ -28,11 +28,18 @@ use std::collections::HashSet;
 /// Represents the complete, historical record of a single tracked object's journey.
 #[derive(Debug, Clone)]
 pub struct Moment {
+    /// A unique ID for this moment, inherited from its `TrackedBlob`.
     pub id: u64,
+    /// The frame number when the object first appeared.
     pub start_frame: u64,
+    /// The last frame number when the object was seen.
     pub end_frame: u64,
+    /// The complete path of the object's center of mass over its lifetime.
     pub path: Vec<(f64, f64)>,
+    /// A collection of the `SmartBlob` data for each frame the object was visible.
+    /// This contains the rich signature data (size, shape, anomaly scores) for later analysis.
     pub blob_history: Vec<SmartBlob>,
+    /// A flag indicating if the moment is still in progress (i.e., the object is still being tracked).
     pub is_active: bool,
 }
 
@@ -62,11 +69,16 @@ impl Moment {
     }
 }
 
-/// The top-level orchestrator for the entire vision pipeline.
+/// The top-level orchestrator for the behavioral analysis layer.
+/// Owns the `Tracker` and manages the lifecycle of `Moment`s.
 pub struct SceneManager {
+    /// The underlying object tracker that performs frame-to-frame data association.
     tracker: Tracker,
+    /// A list of `Moment`s that are currently in progress.
     active_moments: Vec<Moment>,
+    /// A historical archive of `Moment`s that have concluded.
     completed_moments: Vec<Moment>,
+    /// A counter for the total number of frames processed.
     frame_count: u64,
 }
 

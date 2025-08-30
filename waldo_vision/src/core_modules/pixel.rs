@@ -24,11 +24,16 @@ pub mod pixel {
 
     const CHANNELS: usize = 4;
 
+    /// A "dumb" data container representing a single RGBA pixel.
     #[derive(Debug, Clone, PartialEq)]
     pub struct Pixel {
+        /// The red channel value (0-255).
         pub red: Channel,
+        /// The green channel value (0-255).
         pub green: Channel,
+        /// The blue channel value (0-255).
         pub blue: Channel,
+        /// The alpha (transparency) channel value (0-255).
         pub alpha: Channel,
     }
 

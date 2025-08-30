@@ -126,7 +126,10 @@ pub mod blob_detector {
         blobs
     }
 
-    const REGION_GROW_THRESHOLD: f64 = 1.0; // Heat threshold to be included in a blob.
+    /// Defines the minimum "heat" a chunk must have to be included in a growing blob.
+    /// This acts as the "cold edge" of the blob, preventing it from growing indefinitely
+    /// into areas with very low, insignificant anomaly scores.
+    const REGION_GROW_THRESHOLD: f64 = 1.0;
 
     /// Performs a breadth-first search (BFS) to find all connected chunks for a blob.
     fn grow_blob_from_peak(

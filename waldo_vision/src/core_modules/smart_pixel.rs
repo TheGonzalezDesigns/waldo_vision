@@ -24,9 +24,13 @@ pub mod smart_pixel {
     pub type LuminanceDelta = f64;
     pub type HueDifference = f64;
 
+    /// An analytical tool that wraps a `Pixel` to provide optimized comparison methods.
     pub struct SmartPixel {
+        /// The raw `Pixel` data this `SmartPixel` is analyzing.
         pub pixel: Pixel,
+        /// The pre-calculated sum of the RGB channels, cached for performance.
         sum: Sum,
+        /// The pre-calculated luminance of the pixel, cached for performance.
         luminance: Luminance,
     }
 

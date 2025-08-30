@@ -32,36 +32,64 @@ const ANOMALY_THRESHOLD_STD_DEV: f64 = 3.0;
 const STABLE_LUMINANCE_THRESHOLD: f64 = 2.0;
 
 /// Holds the multi-dimensional signature of a detected anomaly.
+/// Each field represents the statistical significance (Z-score) of the change.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnomalyDetails {
+    /// The significance of the change in brightness.
     pub luminance_score: f64,
+    /// The significance of the change in overall color energy (sum of RGB).
     pub color_score: f64,
+    /// The significance of the change in the color's hue or balance.
     pub hue_score: f64,
 }
 
 /// Represents the current state of a SmartChunk based on its temporal analysis.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChunkStatus {
+    /// The chunk is new and gathering initial data before analysis can begin.
     Learning,
+    /// The chunk's rate of change is below the noise threshold.
     Stable,
+    /// The chunk's change is significant but statistically consistent with recent motion.
     PredictableMotion,
+    /// The chunk's change is a statistical outlier from its learned behavior.
     AnomalousEvent(AnomalyDetails),
 }
 
 /// A stateful analyzer for a single chunk location in an image grid.
 pub struct SmartChunk {
+    // --- Identity ---
+    /// The column index of this chunk in the main grid.
     pub chunk_x: u32,
+    /// The row index of this chunk in the main grid.
     pub chunk_y: u32,
+
+    // --- Temporal History ---
+    /// A sliding window of the average `Pixel` value for this chunk's location over the last N frames.
     average_pixel_history: VecDeque<Pixel>,
+    /// A sliding window of the calculated luminance difference between frames.
     luminance_delta_history: VecDeque<LuminanceDelta>,
+    /// A sliding window of the calculated color difference between frames.
     color_delta_history: VecDeque<f64>,
+    /// A sliding window of the calculated hue difference between frames.
     hue_difference_history: VecDeque<HueDifference>,
+
+    // --- Learned State (Published for advanced analysis) ---
+    /// The learned average (mean) change in luminance for this chunk.
     pub mean_luminance_delta: f64,
+    /// The learned standard deviation of the change in luminance.
     pub std_dev_luminance_delta: f64,
+    /// The learned average (mean) change in color sum for this chunk.
     pub mean_color_delta: f64,
+    /// The learned standard deviation of the change in color sum.
     pub std_dev_color_delta: f64,
+    /// The learned average (mean) change in hue for this chunk.
     pub mean_hue_difference: f64,
+    /// The learned standard deviation of the change in hue.
     pub std_dev_hue_difference: f64,
+
+    // --- Current Status ---
+    /// The current calculated status of this chunk.
     pub status: ChunkStatus,
 }
 

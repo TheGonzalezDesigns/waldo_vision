@@ -24,7 +24,7 @@
 
 use crate::core_modules::smart_chunk::AnomalyDetails;
 
-/// A simple struct to represent a 2D point or coordinate.
+/// A simple struct to represent a 2D point or coordinate on the chunk grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Point {
     pub x: u32,
@@ -32,18 +32,22 @@ pub struct Point {
 }
 
 /// Represents a single, spatially coherent object detected in a frame.
+/// This is a "dumb" data container that summarizes the properties of a detected motion event.
 #[derive(Debug, Clone)]
 pub struct SmartBlob {
-    /// A unique identifier assigned to this blob for the current frame.
+    /// A unique identifier assigned to this blob for the current frame only. Not persistent.
     pub id: u64,
-    /// The rectangular box that encloses all chunks in the blob.
-    pub bounding_box: (Point, Point), // Top-left and bottom-right corners
+    /// The rectangular box that encloses all chunks in the blob, represented by its
+    /// top-left and bottom-right corners.
+    pub bounding_box: (Point, Point),
     /// The list of grid coordinates for every chunk that makes up this blob.
     pub chunk_coords: Vec<Point>,
-    /// The total number of chunks in the blob.
+    /// The total number of chunks in the blob, representing its area.
     pub size_in_chunks: usize,
-    /// The average "significance" scores from all chunks within the blob.
+    /// The average "significance" scores (luminance, color, hue) from all chunks
+    /// within the blob. This forms the core of the blob's analytical signature.
     pub average_anomaly: AnomalyDetails,
-    /// The weighted center of the blob, providing a more precise location.
+    /// The center of the blob, weighted by the `luminance_score` of each chunk.
+    /// This provides a more precise location of the "epicenter" of the motion.
     pub center_of_mass: (f64, f64),
 }

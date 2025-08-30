@@ -27,12 +27,19 @@ use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::pixel::pixel::Pixel;
 use crate::core_modules::smart_chunk::{ChunkStatus, SmartChunk};
 
+/// Manages the entire grid of `SmartChunk`s and orchestrates the temporal analysis layer.
 pub struct GridManager {
+    /// The width of the full image in pixels, needed for chunk extraction math.
     image_width: u32,
+    /// The width of the grid in chunks (image_width / chunk_width).
     grid_width: u32,
+    /// The height of the grid in chunks (image_height / chunk_height).
     grid_height: u32,
+    /// The width of a single chunk in pixels.
     chunk_width: u32,
+    /// The height of a single chunk in pixels.
     chunk_height: u32,
+    /// A flattened vector holding all the stateful `SmartChunk` analyzers, one for each grid position.
     smart_chunks: Vec<SmartChunk>,
 }
 

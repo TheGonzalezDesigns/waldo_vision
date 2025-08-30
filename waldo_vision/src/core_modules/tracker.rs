@@ -34,13 +34,20 @@ const MAX_FRAMES_SINCE_SEEN: u32 = 5; // How many frames an object can be lost b
 const DISTANCE_THRESHOLD: f64 = 5.0; // Max distance (in chunks) to be considered a match.
 
 /// Represents an object that is being tracked across multiple frames.
+/// This struct is stateful and holds the history and motion data for a single object.
 #[derive(Debug, Clone)]
 pub struct TrackedBlob {
+    /// A unique and persistent ID for this tracked object.
     pub id: u64,
+    /// The most recent `SmartBlob` data for this object, representing its state in the last frame it was seen.
     pub latest_blob: SmartBlob,
+    /// A recent history of the object's center of mass, used for velocity calculation.
     pub position_history: VecDeque<(f64, f64)>,
+    /// The calculated velocity of the object in chunks per frame.
     pub velocity: (f64, f64),
+    /// The number of consecutive frames this object has been tracked.
     pub age: u32,
+    /// The number of frames since this object was last seen. Used to handle occlusion and disappearance.
     pub frames_since_seen: u32,
 }
 
@@ -93,8 +100,11 @@ impl TrackedBlob {
 }
 
 /// Manages the list of `TrackedBlob`s from one frame to the next.
+/// This is the engine of the behavioral analysis layer.
 pub struct Tracker {
+    /// The list of objects currently being tracked.
     tracked_blobs: Vec<TrackedBlob>,
+    /// A counter to ensure each new object gets a unique ID.
     next_id: u64,
 }
 
