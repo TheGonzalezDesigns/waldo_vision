@@ -2,6 +2,12 @@
 name = "waldo_vision"
 version = "0.1.0"
 edition = "2024"
+description = "A multi-layered computer vision engine for detecting significant events in real-time video streams."
+license = "MIT"
+repository = "https://github.com/TheGonzalezDesigns/waldo_vision"
+readme = "README.md"
+keywords = ["computer-vision", "motion-detection", "event-detection", "filter", "analysis"]
+categories = ["computer-vision", "multimedia::video"]
 
 [dependencies]
 image = "0.25.6"
