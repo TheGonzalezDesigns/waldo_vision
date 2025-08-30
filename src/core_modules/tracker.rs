@@ -26,7 +26,7 @@
 //     of objects—is the essential foundation for all higher-level behavioral analysis,
 //     such as motion pattern filtering (ignoring pacing) or re-identification.
 
-use crate::core_modules::smart_blob::{Point, SmartBlob};
+use crate::core_modules::smart_blob::SmartBlob;
 use std::collections::{HashSet, VecDeque};
 
 const POSITION_HISTORY_SIZE: usize = 10;
