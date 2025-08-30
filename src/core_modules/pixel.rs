@@ -1,3 +1,19 @@
+// THEORY:
+// The `Pixel` module serves as the most fundamental building block of our vision system.
+// It is designed as a "dumb" data container, meaning its primary responsibility is to
+// represent the raw RGBA data of a single pixel accurately and efficiently.
+//
+// Key architectural principles:
+// 1.  **Data Purity**: It holds the raw `u8` channel values without any interpretation.
+// 2.  **Intrinsic Knowledge**: It contains methods (`luminance`, `sum`, `color_ratios`)
+//     that calculate properties based *only* on the pixel's own internal data. It knows
+//     nothing about other pixels.
+// 3.  **Efficiency**: By being a simple, transparent struct, it is fast to create, copy,
+//     and store in large collections like `Vec<Pixel>`.
+//
+// This module intentionally separates the concept of "what a pixel is" from the more
+// complex question of "how a pixel relates to others," which is handled by `SmartPixel`.
+
 pub mod pixel {
     pub type Byte = u8;
     pub type Bytes = Vec<Byte>;
