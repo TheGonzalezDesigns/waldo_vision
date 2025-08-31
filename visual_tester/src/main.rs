@@ -7,7 +7,7 @@ use opencv::{
 use std::env;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinSet;
-use waldo_vision::pipeline::{ChunkStatus, FrameAnalysis, PipelineConfig, TrackedBlob, TrackedState, VisionPipeline};
+use waldo_vision::pipeline::{ChunkStatus, FrameAnalysis, PipelineConfig, SceneState, TrackedBlob, TrackedState, VisionPipeline};
 
 #[tokio::main]
 async fn main() -> opencv::Result<()> {
@@ -46,7 +46,9 @@ async fn main() -> opencv::Result<()> {
         behavioral_anomaly_threshold: 3.0,
         absolute_min_blob_size: 2,
         blob_size_std_dev_filter: 2.0,
-        global_disturbance_threshold: 0.25,
+        disturbance_entry_threshold: 0.25,
+        disturbance_exit_threshold: 0.15,
+        disturbance_confirmation_frames: 5,
     });
     let pipeline = Arc::new(Mutex::new(VisionPipeline::new((*config).clone())));
 
@@ -100,8 +102,8 @@ fn draw_header(frame: &mut Mat, frame_index: usize, analysis: &FrameAnalysis) {
     let rect = Rect::new(0, 0, frame.cols(), header_height);
     imgproc::rectangle(frame, rect, Scalar::new(0.0, 0.0, 0.0, 0.0), -1, imgproc::LINE_8, 0).unwrap();
 
-    let status_text = if analysis.scene_is_stable { "STABLE" } else { "GLOBAL DISTURBANCE" };
-    let event_text = format!("Frame: {} | Scene: {} | Significant Events: {}", frame_index, status_text, analysis.significant_event_count);
+    let status_text = format!("{:?}", analysis.scene_state);
+    let event_text = format!("Frame: {} | Scene: {} | Events: {}", frame_index, status_text, analysis.significant_event_count);
     
     let text_pos = core::Point::new(10, 25);
     imgproc::put_text(frame, &event_text, text_pos, imgproc::FONT_HERSHEY_SIMPLEX, 0.7, Scalar::new(255.0, 255.0, 255.0, 0.0), 2, imgproc::LINE_AA, false).unwrap();
