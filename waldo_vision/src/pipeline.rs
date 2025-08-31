@@ -29,8 +29,6 @@ pub struct PipelineConfig {
     pub behavioral_anomaly_threshold: f64,
     pub absolute_min_blob_size: usize,
     pub blob_size_std_dev_filter: f64,
-    /// The percentage of non-stable chunks that must suddenly appear to trigger a
-    /// `GlobalDisturbance` event. A value of 0.25 means 25% of the scene must destabilize.
     pub global_disturbance_threshold: f64,
 }
 
@@ -39,7 +37,6 @@ pub struct PipelineConfig {
 pub struct MentionData {
     pub new_significant_moments: Vec<Moment>,
     pub completed_significant_moments: Vec<Moment>,
-    /// A flag indicating that a global scene change occurred, not just an isolated object.
     pub is_global_disturbance: bool,
 }
 
@@ -50,14 +47,24 @@ pub enum Report {
     SignificantMention(MentionData),
 }
 
+/// A snapshot of the pipeline's state for a single frame, used for visualization.
+#[derive(Debug, Clone)]
+pub struct FrameAnalysis {
+    pub report: Report,
+    pub status_map: Vec<ChunkStatus>,
+    pub tracked_blobs: Vec<TrackedBlob>,
+    pub scene_is_stable: bool,
+    pub significant_event_count: u64,
+}
+
 /// The main, top-level struct for the vision engine.
 pub struct VisionPipeline {
     grid_manager: GridManager,
     scene_manager: SceneManager,
     config: PipelineConfig,
-    last_status_map: Vec<ChunkStatus>,
     blob_size_history: VecDeque<usize>,
     scene_stability_history: VecDeque<f64>,
+    significant_event_count: u64,
 }
 
 impl VisionPipeline {
@@ -68,61 +75,84 @@ impl VisionPipeline {
             config.chunk_width,
             config.chunk_height,
         );
-        let num_chunks = (config.image_width / config.chunk_width) * (config.image_height / config.chunk_height);
         Self {
             grid_manager,
             scene_manager: SceneManager::new(),
             config,
-            last_status_map: vec![ChunkStatus::Learning; num_chunks as usize],
             blob_size_history: VecDeque::with_capacity(BLOB_SIZE_HISTORY_LENGTH),
             scene_stability_history: VecDeque::with_capacity(SCENE_STABILITY_HISTORY_LENGTH),
+            significant_event_count: 0,
         }
     }
 
-    pub fn significant_mention_detected(&mut self, frame_buffer: &[u8]) -> bool {
-        let report = self.generate_report(frame_buffer);
-        matches!(report, Report::SignificantMention(_))
-    }
-
-    pub fn generate_report(&mut self, frame_buffer: &[u8]) -> Report {
-        // Stage 1: Temporal Analysis
-        self.last_status_map = self.grid_manager.process_frame(frame_buffer);
-
-        // Stage 1.5: Meta-Analysis of Scene Stability
-        let status_map_clone = self.last_status_map.clone();
-        let is_global_disturbance = self.analyze_scene_stability(&status_map_clone);
-
-        // Stage 2: Spatial Grouping
+    /// Processes a frame and returns a comprehensive analysis snapshot.
+    pub fn process_frame(&mut self, frame_buffer: &[u8]) -> FrameAnalysis {
+        let status_map = self.grid_manager.process_frame(frame_buffer);
+        let is_global_disturbance = self.analyze_scene_stability(&status_map);
         let raw_blobs = blob_detector::find_blobs(
-            &self.last_status_map,
+            &status_map,
             self.config.image_width / self.config.chunk_width,
             self.config.image_height / self.config.chunk_height,
         );
-
-        // Stage 2.5: Production-Ready Blob Filtering
         let filtered_blobs = self.filter_blobs(raw_blobs);
-
-        // Stage 3: Behavioral Analysis
         let (newly_started, newly_completed) = self.scene_manager.update(filtered_blobs, &self.config);
 
-        // Stage 4: Final, Tracker-Aware Decision Logic
         let new_significant_moments: Vec<Moment> = newly_started.into_iter().filter(|m| m.is_significant).collect();
         let completed_significant_moments: Vec<Moment> = newly_completed.into_iter().filter(|m| m.is_significant).collect();
 
-        if new_significant_moments.is_empty() && completed_significant_moments.is_empty() && !is_global_disturbance {
-            Report::NoSignificantMention
-        } else {
+        let is_significant_frame = !new_significant_moments.is_empty() || !completed_significant_moments.is_empty() || is_global_disturbance;
+        if is_significant_frame {
+            self.significant_event_count += 1;
+        }
+
+        let report = if is_significant_frame {
             Report::SignificantMention(MentionData {
                 new_significant_moments,
                 completed_significant_moments,
                 is_global_disturbance,
             })
+        } else {
+            Report::NoSignificantMention
+        };
+
+        FrameAnalysis {
+            report,
+            status_map: status_map.to_vec(),
+            tracked_blobs: self.scene_manager.get_tracked_blobs().to_vec(),
+            scene_is_stable: !is_global_disturbance,
+            significant_event_count: self.significant_event_count,
         }
     }
 
     fn filter_blobs(&mut self, blobs: Vec<SmartBlob>) -> Vec<SmartBlob> {
-        // ... (filtering logic remains the same)
-        blobs // Placeholder
+        let (mean, std_dev) = {
+            if self.blob_size_history.is_empty() { (0.0, 0.0) } else {
+                let sum: usize = self.blob_size_history.iter().sum();
+                let mean = sum as f64 / self.blob_size_history.len() as f64;
+                let variance = self.blob_size_history.iter()
+                    .map(|value| (*value as f64 - mean).powi(2))
+                    .sum::<f64>() / self.blob_size_history.len() as f64;
+                (mean, variance.sqrt())
+            }
+        };
+
+        let mut filtered_blobs = Vec::new();
+        for blob in blobs {
+            if blob.size_in_chunks < self.config.absolute_min_blob_size { continue; }
+            if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH / 2 {
+                let threshold = mean - self.config.blob_size_std_dev_filter * std_dev;
+                if (blob.size_in_chunks as f64) < threshold { continue; }
+            }
+            filtered_blobs.push(blob);
+        }
+
+        for blob in &filtered_blobs {
+            if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH {
+                self.blob_size_history.pop_front();
+            }
+            self.blob_size_history.push_back(blob.size_in_chunks);
+        }
+        filtered_blobs
     }
 
     /// Analyzes the overall stability of the scene to detect global changes.
@@ -133,7 +163,6 @@ impl VisionPipeline {
         let num_unstable_chunks = status_map.iter().filter(|s| !matches!(s, ChunkStatus::Stable | ChunkStatus::Learning)).count();
         let current_instability = num_unstable_chunks as f64 / num_chunks as f64;
 
-        // For the first few frames, the scene is expected to be chaotic.
         if self.scene_stability_history.len() < SCENE_STABILITY_HISTORY_LENGTH / 2 {
             self.scene_stability_history.push_back(current_instability);
             return false;
@@ -146,15 +175,6 @@ impl VisionPipeline {
             self.scene_stability_history.pop_front();
         }
 
-        // A global disturbance is a sudden, massive spike in instability compared to the recent past.
         current_instability > avg_historical_instability + self.config.global_disturbance_threshold
-    }
-
-    pub fn get_last_status_map(&self) -> &[ChunkStatus] {
-        &self.last_status_map
-    }
-
-    pub fn get_tracked_blobs(&self) -> &Vec<TrackedBlob> {
-        self.scene_manager.get_tracked_blobs()
     }
 }
