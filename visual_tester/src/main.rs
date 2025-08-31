@@ -66,24 +66,21 @@ fn main() -> opencv::Result<()> {
                 let _report = pipeline.generate_report(&frame_buffer);
 
                 // --- 6. Visualization ---
-                // Create a semi-transparent black overlay to dim the static parts of the scene.
-                let mut dimming_overlay = Mat::new_size_with_default(
-                    frame.size()?,
-                    core::CV_8UC4,
-                    Scalar::new(0.0, 0.0, 0.0, 100.0), // Semi-transparent black
-                )?;
+                // Start with a mutable clone of the original frame.
+                let mut output_frame = frame.clone();
 
                 let status_map = pipeline.get_last_status_map();
-                
-                // Create a second overlay for the colorful heatmap.
+
+                // Create the colorful heatmap overlay.
                 let mut heatmap_overlay = Mat::new_size_with_default(
                     frame.size()?,
-                    core::CV_8UC4,
-                    Scalar::new(0.0, 0.0, 0.0, 0.0), // Fully transparent
+                    core::CV_8UC3, // BGR, no alpha needed for this part
+                    Scalar::new(0.0, 0.0, 0.0, 0.0),
                 )?;
 
-                draw_heat_and_cutouts(
-                    &mut dimming_overlay,
+                // --- 7. Apply Dimming and Draw Heatmap ---
+                apply_dimming_and_heat(
+                    &mut output_frame,
                     &mut heatmap_overlay,
                     status_map,
                     frame_width,
@@ -91,25 +88,12 @@ fn main() -> opencv::Result<()> {
                     config.chunk_height,
                 );
 
-                // --- 7. Blending ---
-                // First, convert the original frame to BGRA to blend with overlays.
-                let mut bgra_frame = Mat::default();
-                imgproc::cvt_color(&frame, &mut bgra_frame, imgproc::COLOR_BGR2BGRA, 0)?;
+                // --- 8. Final Blend ---
+                // Blend the heatmap colors onto the now partially-dimmed output frame.
+                core::add_weighted(&output_frame, 1.0, &heatmap_overlay, 0.8, 0.0, &mut output_frame, -1)?;
 
-                // Blend the dimming layer onto the frame.
-                let mut dimmed_frame = Mat::default();
-                core::add_weighted(&bgra_frame, 1.0, &dimming_overlay, 1.0, 0.0, &mut dimmed_frame, -1)?;
-
-                // Blend the heatmap layer on top of the dimmed frame.
-                let mut final_frame_bgra = Mat::default();
-                core::add_weighted(&dimmed_frame, 1.0, &heatmap_overlay, 1.0, 0.0, &mut final_frame_bgra, -1)?;
-
-                // Convert back to BGR for the video writer.
-                let mut final_frame_bgr = Mat::default();
-                imgproc::cvt_color(&final_frame_bgra, &mut final_frame_bgr, imgproc::COLOR_BGRA2BGR, 0)?;
-
-                // --- 8. Write Output Frame ---
-                writer.write(&final_frame_bgr)?;
+                // --- 9. Write Output Frame ---
+                writer.write(&output_frame)?;
             }
             Ok(false) => {
                 // End of video
@@ -126,10 +110,10 @@ fn main() -> opencv::Result<()> {
     Ok(())
 }
 
-/// Draws the heatmap and cuts out active regions from the dimming overlay.
-fn draw_heat_and_cutouts(
-    dimming_overlay: &mut Mat,
-    heatmap_overlay: &mut Mat,
+/// Applies dimming to inactive chunks and draws heatmap colors for active chunks.
+fn apply_dimming_and_heat(
+    frame: &mut Mat,
+    heatmap: &mut Mat,
     status_map: &[ChunkStatus],
     width: u32,
     chunk_w: u32,
@@ -137,45 +121,45 @@ fn draw_heat_and_cutouts(
 ) {
     let grid_w = width / chunk_w;
     for (i, status) in status_map.iter().enumerate() {
-        if matches!(status, ChunkStatus::Stable | ChunkStatus::Learning) {
-            continue; // Leave these areas dimmed.
-        }
-
         let y = i as u32 / grid_w;
         let x = i as u32 % grid_w;
 
         let top_left = core::Point::new((x * chunk_w) as i32, (y * chunk_h) as i32);
         let rect = Rect::new(top_left.x, top_left.y, chunk_w as i32, chunk_h as i32);
 
-        // "Cut out" the active region from the dimming overlay by making it transparent.
-        imgproc::rectangle(dimming_overlay, rect, Scalar::new(0.0, 0.0, 0.0, 0.0), -1, imgproc::LINE_8, 0).unwrap();
-
-        // Draw the corresponding heatmap color on the separate heatmap overlay.
-        let color = match status {
-            ChunkStatus::PredictableMotion => Scalar::new(255.0, 0.0, 0.0, 150.0), // Semi-transparent Blue
+        match status {
+            ChunkStatus::Stable | ChunkStatus::Learning => {
+                // This is an inactive chunk, so we dim it.
+                let mut roi = Mat::roi(frame, rect).unwrap();
+                // Multiply the region by 0.4 to make it darker.
+                core::multiply(&roi, &Scalar::all(0.4), &mut roi, 1.0, -1).unwrap();
+            }
+            ChunkStatus::PredictableMotion => {
+                // This is an active chunk, so we draw its heatmap color.
+                let color = Scalar::new(255.0, 0.0, 0.0, 0.0); // Blue
+                imgproc::rectangle(heatmap, rect, color, -1, imgproc::LINE_8, 0).unwrap();
+            }
             ChunkStatus::AnomalousEvent(details) => {
-                // Map the significance score to a Blue -> Yellow -> Red gradient.
+                // This is a highly active chunk, so we draw its heatmap color.
                 let score = details.luminance_score.clamp(0.0, 10.0);
                 let r: f64;
                 let g: f64;
                 let b: f64;
 
-                if score <= 5.0 {
+                if score <= 5.0 { // Blue to Yellow
                     let ratio = score / 5.0;
                     b = 255.0 * (1.0 - ratio);
                     g = 255.0 * ratio;
                     r = 0.0;
-                } else {
+                } else { // Yellow to Red
                     let ratio = (score - 5.0) / 5.0;
                     b = 0.0;
                     g = 255.0 * (1.0 - ratio);
                     r = 255.0 * ratio;
                 }
-                Scalar::new(b, g, r, 150.0) // Semi-transparent
+                let color = Scalar::new(b, g, r, 0.0);
+                imgproc::rectangle(heatmap, rect, color, -1, imgproc::LINE_8, 0).unwrap();
             }
-            _ => Scalar::new(0.0, 0.0, 0.0, 0.0), // Should not happen
-        };
-
-        imgproc::rectangle(heatmap_overlay, rect, color, -1, imgproc::LINE_8, 0).unwrap();
+        }
     }
 }
