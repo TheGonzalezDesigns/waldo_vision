@@ -149,4 +149,9 @@ impl SceneManager {
     pub fn get_completed_moments(&self) -> &Vec<Moment> {
         &self.completed_moments
     }
+
+    /// Provides a view into the `Tracker`'s current list of tracked objects.
+    pub fn get_tracked_blobs(&self) -> &Vec<TrackedBlob> {
+        self.tracker.get_tracked_blobs()
+    }
 }

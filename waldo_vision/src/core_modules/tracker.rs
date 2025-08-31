@@ -195,4 +195,9 @@ impl Tracker {
         self.tracked_blobs = updated_tracked_blobs;
         &self.tracked_blobs
     }
+
+    /// Provides a view into the current list of tracked blobs.
+    pub fn get_tracked_blobs(&self) -> &Vec<TrackedBlob> {
+        &self.tracked_blobs
+    }
 }

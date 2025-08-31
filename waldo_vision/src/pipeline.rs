@@ -32,6 +32,7 @@ use std::collections::VecDeque;
 // Re-export key data structures for the public API.
 pub use crate::core_modules::moment::Moment;
 pub use crate::core_modules::smart_chunk::{AnomalyDetails, ChunkStatus};
+pub use crate::core_modules::tracker::TrackedBlob;
 
 const BLOB_SIZE_HISTORY_LENGTH: usize = 100; // Keep a history of the last 100 blob sizes.
 
@@ -202,5 +203,10 @@ impl VisionPipeline {
     /// Returns a slice of the ChunkStatus map from the most recently processed frame.
     pub fn get_last_status_map(&self) -> &[ChunkStatus] {
         &self.last_status_map
+    }
+
+    /// Returns a slice of the currently tracked blobs from the `SceneManager`.
+    pub fn get_tracked_blobs(&self) -> &Vec<TrackedBlob> {
+        self.scene_manager.get_tracked_blobs()
     }
 }
