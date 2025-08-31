@@ -135,7 +135,7 @@ impl VisionPipeline {
         let filtered_blobs = self.filter_blobs(raw_blobs);
 
         // Stage 3: Behavioral Analysis
-        let (newly_started, newly_completed) = self.scene_manager.update(filtered_blobs);
+        let (newly_started, _newly_completed) = self.scene_manager.update(filtered_blobs);
 
         // Stage 4: Final, Tracker-Aware Decision Logic
         let new_significant_moments: Vec<Moment> = newly_started

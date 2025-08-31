@@ -74,8 +74,8 @@ fn main() -> opencv::Result<()> {
                 // Create the colorful heatmap overlay.
                 let mut heatmap_overlay = Mat::new_size_with_default(
                     frame.size()?,
-                    core::CV_8UC3, // BGR, no alpha needed for this part
-                    Scalar::new(0.0, 0.0, 0.0, 0.0),
+                    core::CV_8UC3, // BGR
+                    Scalar::all(0.0),
                 )?;
 
                 // --- 7. Apply Dimming and Draw Heatmap ---
@@ -89,11 +89,11 @@ fn main() -> opencv::Result<()> {
                 );
 
                 // --- 8. Final Blend ---
-                // Blend the heatmap colors onto the now partially-dimmed output frame.
-                core::add_weighted(&output_frame, 1.0, &heatmap_overlay, 0.8, 0.0, &mut output_frame, -1)?;
+                let mut final_frame = Mat::default();
+                core::add_weighted(&output_frame, 1.0, &heatmap_overlay, 0.8, 0.0, &mut final_frame, -1)?;
 
                 // --- 9. Write Output Frame ---
-                writer.write(&output_frame)?;
+                writer.write(&final_frame)?;
             }
             Ok(false) => {
                 // End of video
@@ -130,9 +130,10 @@ fn apply_dimming_and_heat(
         match status {
             ChunkStatus::Stable | ChunkStatus::Learning => {
                 // This is an inactive chunk, so we dim it.
-                let mut roi = Mat::roi(frame, rect).unwrap();
-                // Multiply the region by 0.4 to make it darker.
-                core::multiply(&roi, &Scalar::all(0.4), &mut roi, 1.0, -1).unwrap();
+                let roi = Mat::roi(frame, rect).unwrap();
+                let mut dimmed_roi = Mat::default();
+                core::multiply(&roi, &Scalar::all(0.4), &mut dimmed_roi, 1.0, -1).unwrap();
+                dimmed_roi.copy_to(&mut Mat::roi(frame, rect).unwrap()).unwrap();
             }
             ChunkStatus::PredictableMotion => {
                 // This is an active chunk, so we draw its heatmap color.
