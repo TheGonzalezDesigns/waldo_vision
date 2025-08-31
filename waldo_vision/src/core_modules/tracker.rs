@@ -234,6 +234,7 @@ fn is_size_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool
     if size_changes.len() < 2 { return false; }
 
     let (mean, std_dev) = calculate_scalar_stats(&size_changes);
+    if blob.size_history.len() < 2 { return false; }
     let current_change = (blob.size_history.back().unwrap() - blob.size_history.get(blob.size_history.len() - 2).unwrap()) as f64;
 
     (current_change - mean) / std_dev.max(0.01) > config.behavioral_anomaly_threshold
