@@ -27,6 +27,7 @@ use crate::core_modules::blob_detector::blob_detector;
 use crate::core_modules::grid_manager::GridManager;
 use crate::core_modules::moment::SceneManager;
 use crate::core_modules::smart_blob::SmartBlob;
+use crate::core_modules::tracker::{TrackedBlob, TrackedState};
 use std::collections::VecDeque;
 
 // Re-export key data structures for the public API.
@@ -47,15 +48,16 @@ pub struct PipelineConfig {
     pub chunk_width: u32,
     /// The height of a single chunk, in pixels.
     pub chunk_height: u32,
-    /// A `Moment` is only reported as significant if it's a "birth" event younger than this many frames.
-    /// This captures the initial appearance of an object.
-    pub significance_age_threshold: u32,
-    /// The statistical filter for blob size. A blob will be discarded if its size (in chunks)
-    /// is more than this many standard deviations below the mean of recent blob sizes.
-    pub blob_size_std_dev_filter: f64,
+    /// A `TrackedBlob` younger than this is considered `New` and thus significant.
+    pub new_age_threshold: u32,
+    /// The statistical threshold (Z-score) for a change in behavior to be considered anomalous.
+    pub behavioral_anomaly_threshold: f64,
     /// The absolute minimum number of chunks a `SmartBlob` must contain to not be
     /// immediately discarded as noise. This is the first stage of blob filtering.
     pub absolute_min_blob_size: usize,
+    /// The statistical filter for blob size. A blob will be discarded if its size (in chunks)
+    /// is more than this many standard deviations below the mean of recent blob sizes.
+    pub blob_size_std_dev_filter: f64,
 }
 
 /// The detailed data package for a significant event, returned by the `VisionPipeline`.
@@ -136,17 +138,18 @@ impl VisionPipeline {
         let filtered_blobs = self.filter_blobs(raw_blobs);
 
         // Stage 3: Behavioral Analysis
-        let (newly_started, _newly_completed) = self.scene_manager.update(filtered_blobs);
+        let (newly_started, newly_completed) = self.scene_manager.update(filtered_blobs, &self.config);
 
         // Stage 4: Final, Tracker-Aware Decision Logic
         let new_significant_moments: Vec<Moment> = newly_started
-            .iter()
-            .filter(|m| self.is_moment_significant(m))
-            .cloned()
+            .into_iter()
+            .filter(|m| m.is_significant)
             .collect();
 
-        // For now, we only report on new moments. Completed moments could be added later.
-        let completed_significant_moments: Vec<Moment> = Vec::new();
+        let completed_significant_moments: Vec<Moment> = newly_completed
+            .into_iter()
+            .filter(|m| m.is_significant)
+            .collect();
 
         if new_significant_moments.is_empty() && completed_significant_moments.is_empty() {
             Report::NoSignificantMention
@@ -188,16 +191,6 @@ impl VisionPipeline {
             self.blob_size_history.push_back(blob.size_in_chunks);
         }
         filtered_blobs
-    }
-
-    /// Analyzes a moment to determine if it's significant based on tracker-aware logic.
-    fn is_moment_significant(&self, moment: &Moment) -> bool {
-        // The primary rule for significance: is this a "birth" event?
-        // We consider a moment significant if it's new (i.e., its age is very young).
-        // This captures the initial appearance of an object, which is the most important event.
-        // We no longer need to check every blob in the history, which solves the re-triggering issue.
-        let age = moment.end_frame - moment.start_frame;
-        age <= self.config.significance_age_threshold as u64
     }
 
     /// Returns a slice of the ChunkStatus map from the most recently processed frame.

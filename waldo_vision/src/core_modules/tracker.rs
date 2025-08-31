@@ -27,85 +27,93 @@
 //     such as motion pattern filtering (ignoring pacing) or re-identification.
 
 use crate::core_modules::smart_blob::SmartBlob;
+use crate::core_modules::smart_chunk::AnomalyDetails;
 use std::collections::{HashSet, VecDeque};
 
-const POSITION_HISTORY_SIZE: usize = 10;
-const MAX_FRAMES_SINCE_SEEN: u32 = 5; // How many frames an object can be lost before it's deleted.
-const DISTANCE_THRESHOLD: f64 = 5.0; // Max distance (in chunks) to be considered a match.
+const HISTORY_SIZE: usize = 15;
+const MAX_FRAMES_SINCE_SEEN: u32 = 5;
+const DISTANCE_THRESHOLD: f64 = 5.0;
+
+/// Represents the current behavioral state of a tracked object.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TrackedState {
+    /// The object has just appeared and is being evaluated.
+    New,
+    /// The object is being tracked and its behavior is consistent and predictable.
+    Tracking,
+    /// The object has been temporarily lost (e.g., occlusion).
+    Lost,
+    /// The object has exhibited a statistically significant change in behavior.
+    Anomalous,
+}
 
 /// Represents an object that is being tracked across multiple frames.
-/// This struct is stateful and holds the history and motion data for a single object.
 #[derive(Debug, Clone)]
 pub struct TrackedBlob {
-    /// A unique and persistent ID for this tracked object.
     pub id: u64,
-    /// The most recent `SmartBlob` data for this object, representing its state in the last frame it was seen.
+    pub state: TrackedState,
     pub latest_blob: SmartBlob,
-    /// A recent history of the object's center of mass, used for velocity calculation.
     pub position_history: VecDeque<(f64, f64)>,
-    /// A recent history of the object's size in chunks, used for size change analysis.
     pub size_history: VecDeque<usize>,
-    /// The calculated velocity of the object in chunks per frame.
+    pub velocity_history: VecDeque<(f64, f64)>,
+    pub signature_history: VecDeque<AnomalyDetails>,
     pub velocity: (f64, f64),
-    /// The number of consecutive frames this object has been tracked.
     pub age: u32,
-    /// The number of frames since this object was last seen. Used to handle occlusion and disappearance.
     pub frames_since_seen: u32,
 }
 
 impl TrackedBlob {
-    /// Creates a new TrackedBlob from a SmartBlob.
     fn new(id: u64, blob: SmartBlob) -> Self {
-        let mut position_history = VecDeque::with_capacity(POSITION_HISTORY_SIZE);
+        let mut position_history = VecDeque::with_capacity(HISTORY_SIZE);
         position_history.push_back(blob.center_of_mass);
-        let mut size_history = VecDeque::with_capacity(POSITION_HISTORY_SIZE);
+        let mut size_history = VecDeque::with_capacity(HISTORY_SIZE);
         size_history.push_back(blob.size_in_chunks);
         Self {
             id,
+            state: TrackedState::New,
             latest_blob: blob,
             position_history,
             size_history,
+            velocity_history: VecDeque::with_capacity(HISTORY_SIZE),
+            signature_history: VecDeque::with_capacity(HISTORY_SIZE),
             velocity: (0.0, 0.0),
             age: 1,
             frames_since_seen: 0,
         }
     }
 
-    /// Updates the state of a tracked blob with new data.
     fn update(&mut self, blob: SmartBlob) {
         self.latest_blob = blob;
-        self.position_history
-            .push_back(self.latest_blob.center_of_mass);
-        if self.position_history.len() > POSITION_HISTORY_SIZE {
-            self.position_history.pop_front();
-        }
-
-        self.size_history.push_back(self.latest_blob.size_in_chunks);
-        if self.size_history.len() > POSITION_HISTORY_SIZE {
-            self.size_history.pop_front();
-        }
-
-        // Calculate new velocity based on the last two positions.
-        if self.position_history.len() > 1 {
-            let new_pos = self.position_history.back().unwrap();
-            let old_pos = self
-                .position_history
-                .get(self.position_history.len() - 2)
-                .unwrap();
-            self.velocity = (new_pos.0 - old_pos.0, new_pos.1 - old_pos.1);
-        }
-
         self.age += 1;
         self.frames_since_seen = 0;
-    }
 
-    /// Predicts the next position of the blob based on its current velocity.
+        // Update histories
+        update_history(&mut self.position_history, self.latest_blob.center_of_mass);
+        update_history(&mut self.size_history, self.latest_blob.size_in_chunks);
+        update_history(&mut self.signature_history, self.latest_blob.average_anomaly.clone());
+
+        // Update velocity
+        if self.position_history.len() > 1 {
+            let new_pos = self.position_history.back().unwrap();
+            let old_pos = self.position_history.get(self.position_history.len() - 2).unwrap();
+            self.velocity = (new_pos.0 - old_pos.0, new_pos.1 - old_pos.1);
+            update_history(&mut self.velocity_history, self.velocity);
+        }
+
+        // The tracker will manage state transitions after the update.
+    }
+    
     fn predict_next_position(&self) -> (f64, f64) {
         let current_pos = self.latest_blob.center_of_mass;
-        (
-            current_pos.0 + self.velocity.0,
-            current_pos.1 + self.velocity.1,
-        )
+        (current_pos.0 + self.velocity.0, current_pos.1 + self.velocity.1)
+    }
+}
+
+/// Generic helper to update a history VecDeque.
+fn update_history<T>(history: &mut VecDeque<T>, new_value: T) {
+    history.push_back(new_value);
+    if history.len() > HISTORY_SIZE {
+        history.pop_front();
     }
 }
 
@@ -129,7 +137,52 @@ impl Tracker {
     /// Updates the tracker with a new set of detected blobs for the current frame.
     pub fn update(&mut self, new_blobs: Vec<SmartBlob>) -> &Vec<TrackedBlob> {
         // --- 0. Spatial Pre-filtering ---
-        // Filter out new blobs that are likely just internal noise of existing tracks.
+        let legitimate_new_blobs = self.filter_internal_noise(new_blobs);
+
+        // --- 1. Matching ---
+        let (matches, mut unmatched_blobs) = self.match_blobs(legitimate_new_blobs);
+
+        // --- 2. State Updating ---
+        let mut updated_tracked_blobs = Vec::new();
+        let mut matched_tracked_indices: HashSet<usize> = HashSet::new();
+
+        // Update blobs that were successfully matched.
+        for (tracked_idx, blob_idx) in matches {
+            let mut tracked_blob = self.tracked_blobs[tracked_idx].clone();
+            tracked_blob.update(unmatched_blobs.remove(&blob_idx).unwrap());
+            updated_tracked_blobs.push(tracked_blob);
+            matched_tracked_indices.insert(tracked_idx);
+        }
+
+        // Handle blobs that were not matched (occlusion or death).
+        for (i, tracked_blob) in self.tracked_blobs.iter().enumerate() {
+            if !matched_tracked_indices.contains(&i) {
+                let mut lost_blob = tracked_blob.clone();
+                lost_blob.frames_since_seen += 1;
+                lost_blob.state = TrackedState::Lost;
+                if lost_blob.frames_since_seen <= MAX_FRAMES_SINCE_SEEN {
+                    updated_tracked_blobs.push(lost_blob);
+                }
+            }
+        }
+
+        // Handle new blobs that were not matched (birth).
+        for new_blob in unmatched_blobs.into_values() {
+            let new_tracked_blob = TrackedBlob::new(self.next_id, new_blob);
+            updated_tracked_blobs.push(new_tracked_blob);
+            self.next_id += 1;
+        }
+
+        self.tracked_blobs = updated_tracked_blobs;
+        &self.tracked_blobs
+    }
+
+    /// Provides a view into the current list of tracked blobs.
+    pub fn get_tracked_blobs(&self) -> &Vec<TrackedBlob> {
+        &self.tracked_blobs
+    }
+
+    fn filter_internal_noise(&self, new_blobs: Vec<SmartBlob>) -> Vec<SmartBlob> {
         let mut legitimate_new_blobs: Vec<SmartBlob> = Vec::new();
         for new_blob in new_blobs {
             let mut is_internal_noise = false;
@@ -146,77 +199,36 @@ impl Tracker {
                 legitimate_new_blobs.push(new_blob);
             }
         }
+        legitimate_new_blobs
+    }
 
-        let mut matches: Vec<(usize, usize)> = Vec::new(); // (tracked_index, new_blob_index)
+    fn match_blobs(&self, legitimate_new_blobs: Vec<SmartBlob>) -> (Vec<(usize, usize)>, std::collections::HashMap<usize, SmartBlob>) {
+        let mut matches: Vec<(usize, usize)> = Vec::new();
         let mut matched_new_blob_indices: HashSet<usize> = HashSet::new();
+        let mut unmatched_blobs: std::collections::HashMap<usize, SmartBlob> = legitimate_new_blobs.into_iter().enumerate().collect();
 
-        // --- 1. Matching ---
-        // Find the best match for each existing tracked blob using the legitimate blobs.
         for (i, tracked_blob) in self.tracked_blobs.iter().enumerate() {
             let predicted_pos = tracked_blob.predict_next_position();
             let mut best_match_dist = DISTANCE_THRESHOLD;
             let mut best_match_index: Option<usize> = None;
 
-            for (j, new_blob) in legitimate_new_blobs.iter().enumerate() {
-                // Skip new blobs that have already been matched.
-                if matched_new_blob_indices.contains(&j) {
-                    continue;
-                }
-
+            for (j, new_blob) in unmatched_blobs.iter() {
                 let dist_sq = (predicted_pos.0 - new_blob.center_of_mass.0).powi(2)
                     + (predicted_pos.1 - new_blob.center_of_mass.1).powi(2);
                 let dist = dist_sq.sqrt();
 
                 if dist < best_match_dist {
                     best_match_dist = dist;
-                    best_match_index = Some(j);
+                    best_match_index = Some(*j);
                 }
             }
 
             if let Some(j) = best_match_index {
                 matches.push((i, j));
                 matched_new_blob_indices.insert(j);
+                unmatched_blobs.remove(&j);
             }
         }
-
-        // --- 2. State Updating ---
-        let mut updated_tracked_blobs = Vec::new();
-        let mut matched_tracked_indices: HashSet<usize> = HashSet::new();
-
-        // Update blobs that were successfully matched.
-        for (i, j) in matches {
-            let mut tracked_blob = self.tracked_blobs[i].clone();
-            tracked_blob.update(legitimate_new_blobs[j].clone());
-            updated_tracked_blobs.push(tracked_blob);
-            matched_tracked_indices.insert(i);
-        }
-
-        // Handle blobs that were not matched (occlusion or death).
-        for (i, tracked_blob) in self.tracked_blobs.iter().enumerate() {
-            if !matched_tracked_indices.contains(&i) {
-                let mut lost_blob = tracked_blob.clone();
-                lost_blob.frames_since_seen += 1;
-                if lost_blob.frames_since_seen <= MAX_FRAMES_SINCE_SEEN {
-                    updated_tracked_blobs.push(lost_blob);
-                }
-            }
-        }
-
-        // Handle new blobs that were not matched (birth).
-        for (j, new_blob) in legitimate_new_blobs.into_iter().enumerate() {
-            if !matched_new_blob_indices.contains(&j) {
-                let new_tracked_blob = TrackedBlob::new(self.next_id, new_blob);
-                updated_tracked_blobs.push(new_tracked_blob);
-                self.next_id += 1;
-            }
-        }
-
-        self.tracked_blobs = updated_tracked_blobs;
-        &self.tracked_blobs
-    }
-
-    /// Provides a view into the current list of tracked blobs.
-    pub fn get_tracked_blobs(&self) -> &Vec<TrackedBlob> {
-        &self.tracked_blobs
+        (matches, unmatched_blobs)
     }
 }
