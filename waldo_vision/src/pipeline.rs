@@ -89,7 +89,8 @@ impl VisionPipeline {
         self.last_status_map = self.grid_manager.process_frame(frame_buffer);
 
         // Stage 1.5: Meta-Analysis of Scene Stability
-        let is_global_disturbance = self.analyze_scene_stability(&self.last_status_map);
+        let status_map_clone = self.last_status_map.clone();
+        let is_global_disturbance = self.analyze_scene_stability(&status_map_clone);
 
         // Stage 2: Spatial Grouping
         let raw_blobs = blob_detector::find_blobs(
