@@ -231,7 +231,7 @@ fn is_acceleration_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> boo
 fn is_size_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
     if blob.size_history.len() < HISTORY_SIZE / 2 { return false; }
     let size_changes: Vec<f64> = blob.size_history.as_slices().0.windows(2).map(|w| (w[1] as f64 - w[0] as f64)).collect();
-    if size_changes.is_empty() { return false; }
+    if size_changes.len() < 2 { return false; }
 
     let (mean, std_dev) = calculate_scalar_stats(&size_changes);
     let current_change = (blob.size_history.back().unwrap() - blob.size_history.get(blob.size_history.len() - 2).unwrap()) as f64;

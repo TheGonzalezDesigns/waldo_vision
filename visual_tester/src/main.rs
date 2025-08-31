@@ -56,7 +56,10 @@ async fn main() -> opencv::Result<()> {
         let pipeline_clone = Arc::clone(&pipeline);
         let config_clone = Arc::clone(&config);
         join_set.spawn(async move {
-            let mut pipeline = pipeline_clone.lock().unwrap();
+            let mut pipeline = match pipeline_clone.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             
             let mut rgba_frame = Mat::default();
             imgproc::cvt_color(&frame, &mut rgba_frame, imgproc::COLOR_BGR2RGBA, 0).unwrap();
