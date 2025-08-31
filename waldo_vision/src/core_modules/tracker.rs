@@ -123,11 +123,9 @@ impl Tracker {
     }
 
     pub fn update(&mut self, new_blobs: Vec<SmartBlob>, config: &PipelineConfig) -> &Vec<TrackedBlob> {
-        // Placeholder for merge logic
-        let coherent_blobs = new_blobs; 
-
+        let coherent_blobs = self.merge_fragmented_blobs(new_blobs);
         let (matches, unmatched_blobs_map) = self.match_blobs(coherent_blobs);
-        let mut unmatched_blobs: HashMap<usize, SmartBlob> = unmatched_blobs_map;
+        let mut unmatched_blobs = unmatched_blobs_map;
 
         let mut updated_tracked_blobs = Vec::new();
         let mut matched_tracked_indices = HashSet::new();
@@ -163,6 +161,10 @@ impl Tracker {
         &self.tracked_blobs
     }
 
+    fn merge_fragmented_blobs(&self, blobs: Vec<SmartBlob>) -> Vec<SmartBlob> {
+        blobs // Placeholder for future enhancement
+    }
+
     fn match_blobs(&self, blobs: Vec<SmartBlob>) -> (Vec<(usize, usize)>, HashMap<usize, SmartBlob>) {
         let mut matches = Vec::new();
         let unmatched_blobs: HashMap<usize, SmartBlob> = blobs.into_iter().enumerate().collect();
@@ -196,11 +198,65 @@ impl Tracker {
             blob.state = TrackedState::New;
             return;
         }
-        // Placeholder for future statistical analysis
-        blob.state = TrackedState::Tracking;
+
+        let accel_anomaly = is_acceleration_anomalous(blob, config);
+        let size_anomaly = is_size_change_anomalous(blob, config);
+        let hue_anomaly = is_hue_change_anomalous(blob, config);
+
+        if accel_anomaly || size_anomaly || hue_anomaly {
+            blob.state = TrackedState::Anomalous;
+        } else {
+            blob.state = TrackedState::Tracking;
+        }
     }
 
     pub fn get_tracked_blobs(&self) -> &Vec<TrackedBlob> {
         &self.tracked_blobs
     }
+}
+
+// --- Behavioral Anomaly Detection Helpers ---
+
+fn is_acceleration_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
+    if blob.velocity_history.len() < HISTORY_SIZE / 2 { return false; }
+    let (mean_vx, std_dev_vx) = calculate_vector_stats(&blob.velocity_history, |v| v.0);
+    let (mean_vy, std_dev_vy) = calculate_vector_stats(&blob.velocity_history, |v| v.1);
+    
+    let z_score_x = (blob.velocity.0 - mean_vx) / std_dev_vx.max(0.01);
+    let z_score_y = (blob.velocity.1 - mean_vy) / std_dev_vy.max(0.01);
+
+    z_score_x.abs() > config.behavioral_anomaly_threshold || z_score_y.abs() > config.behavioral_anomaly_threshold
+}
+
+fn is_size_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
+    if blob.size_history.len() < HISTORY_SIZE / 2 { return false; }
+    let size_changes: Vec<f64> = blob.size_history.as_slices().0.windows(2).map(|w| (w[1] as f64 - w[0] as f64)).collect();
+    if size_changes.is_empty() { return false; }
+
+    let (mean, std_dev) = calculate_scalar_stats(&size_changes);
+    let current_change = (blob.size_history.back().unwrap() - blob.size_history.get(blob.size_history.len() - 2).unwrap()) as f64;
+
+    (current_change - mean) / std_dev.max(0.01) > config.behavioral_anomaly_threshold
+}
+
+fn is_hue_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
+    if blob.signature_history.len() < HISTORY_SIZE / 2 { return false; }
+    let hue_scores: Vec<f64> = blob.signature_history.iter().map(|s| s.hue_score).collect();
+    let (mean, std_dev) = calculate_scalar_stats(&hue_scores);
+    let current_hue = blob.latest_blob.average_anomaly.hue_score;
+
+    (current_hue - mean) / std_dev.max(0.01) > config.behavioral_anomaly_threshold
+}
+
+fn calculate_scalar_stats(data: &[f64]) -> (f64, f64) {
+    let sum = data.iter().sum::<f64>();
+    let mean = sum / data.len() as f64;
+    let variance = data.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / data.len() as f64;
+    (mean, variance.sqrt())
+}
+
+fn calculate_vector_stats<F>(data: &VecDeque<(f64, f64)>, accessor: F) -> (f64, f64)
+where F: Fn(&(f64, f64)) -> f64 {
+    let values: Vec<f64> = data.iter().map(accessor).collect();
+    calculate_scalar_stats(&values)
 }
