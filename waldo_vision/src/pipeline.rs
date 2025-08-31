@@ -157,24 +157,33 @@ impl VisionPipeline {
 
     /// Analyzes the overall stability of the scene to detect global changes.
     fn analyze_scene_stability(&mut self, status_map: &[ChunkStatus]) -> bool {
+        const HYSTERESIS_WINDOW: usize = 5; // Use the average of the last 5 frames for stability checks.
+
         let num_chunks = status_map.len();
         if num_chunks == 0 { return false; }
 
         let num_unstable_chunks = status_map.iter().filter(|s| !matches!(s, ChunkStatus::Stable | ChunkStatus::Learning)).count();
         let current_instability = num_unstable_chunks as f64 / num_chunks as f64;
 
-        if self.scene_stability_history.len() < SCENE_STABILITY_HISTORY_LENGTH / 2 {
-            self.scene_stability_history.push_back(current_instability);
-            return false;
-        }
-
-        let avg_historical_instability: f64 = self.scene_stability_history.iter().sum::<f64>() / self.scene_stability_history.len() as f64;
-        
         self.scene_stability_history.push_back(current_instability);
         if self.scene_stability_history.len() > SCENE_STABILITY_HISTORY_LENGTH {
             self.scene_stability_history.pop_front();
         }
 
-        current_instability > avg_historical_instability + self.config.global_disturbance_threshold
+        // Wait for the history to be sufficiently populated before making decisions.
+        if self.scene_stability_history.len() < SCENE_STABILITY_HISTORY_LENGTH {
+            return false;
+        }
+
+        // --- Hysteresis Logic ---
+        // Calculate the average of the last few frames to smooth out flickering.
+        let short_term_history = self.scene_stability_history.iter().rev().take(HYSTERESIS_WINDOW);
+        let short_term_avg_instability = short_term_history.sum::<f64>() / HYSTERESIS_WINDOW as f64;
+
+        // Calculate the average of the longer-term history for a stable baseline.
+        let long_term_avg_instability: f64 = self.scene_stability_history.iter().sum::<f64>() / self.scene_stability_history.len() as f64;
+        
+        // A global disturbance is a sustained spike in instability.
+        short_term_avg_instability > long_term_avg_instability + self.config.global_disturbance_threshold
     }
 }
