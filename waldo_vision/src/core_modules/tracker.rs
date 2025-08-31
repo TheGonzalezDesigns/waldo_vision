@@ -24,7 +24,7 @@
 // 4.  **Lifecycle Management**: It manages the birth, life, and death of a track,
 //     handling occlusion and re-acquisition gracefully.
 
-use crate::core_modules::smart_blob::{SmartBlob, Point};
+use crate::core_modules::smart_blob::SmartBlob;
 use crate::core_modules::smart_chunk::AnomalyDetails;
 use crate::pipeline::PipelineConfig;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -32,7 +32,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 const HISTORY_SIZE: usize = 15;
 const MAX_FRAMES_SINCE_SEEN: u32 = 5;
 const DISTANCE_THRESHOLD: f64 = 5.0;
-const MERGE_HUE_SIMILARITY_THRESHOLD: f64 = 0.5; // How similar hues must be to merge blobs.
 
 /// Represents the current behavioral state of a tracked object.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,7 +55,6 @@ pub struct TrackedBlob {
     pub velocity: (f64, f64),
     pub age: u32,
     pub frames_since_seen: u32,
-    /// If this blob is a static feature (like a brooch), this will hold the ID of its parent.
     pub parent_id: Option<u64>,
 }
 
@@ -111,7 +109,6 @@ fn update_history<T>(history: &mut VecDeque<T>, new_value: T) {
     }
 }
 
-/// Manages the list of `TrackedBlob`s from one frame to the next.
 pub struct Tracker {
     tracked_blobs: Vec<TrackedBlob>,
     next_id: u64,
@@ -126,28 +123,25 @@ impl Tracker {
     }
 
     pub fn update(&mut self, new_blobs: Vec<SmartBlob>, config: &PipelineConfig) -> &Vec<TrackedBlob> {
-        // --- Stage 0: Merge Fragmented Blobs ---
-        let coherent_blobs = self.merge_fragmented_blobs(new_blobs);
+        // Placeholder for merge logic
+        let coherent_blobs = new_blobs; 
 
-        // --- Stage 1: Matching ---
-        let (matches, mut unmatched_blobs) = self.match_blobs(coherent_blobs);
+        let (matches, unmatched_blobs_map) = self.match_blobs(coherent_blobs);
+        let mut unmatched_blobs: HashMap<usize, SmartBlob> = unmatched_blobs_map;
 
-        // --- Stage 2: State Updating & Behavioral Analysis ---
         let mut updated_tracked_blobs = Vec::new();
         let mut matched_tracked_indices = HashSet::new();
 
         for (tracked_idx, blob_idx) in matches {
             let mut tracked_blob = self.tracked_blobs[tracked_idx].clone();
-            tracked_blob.update(unmatched_blobs.remove(&blob_idx).unwrap());
-            
-            // Perform behavioral analysis for existing tracks.
-            self.analyze_blob_behavior(&mut tracked_blob, config);
-
-            updated_tracked_blobs.push(tracked_blob);
-            matched_tracked_indices.insert(tracked_idx);
+            if let Some(blob_data) = unmatched_blobs.remove(&blob_idx) {
+                tracked_blob.update(blob_data);
+                self.analyze_blob_behavior(&mut tracked_blob, config);
+                updated_tracked_blobs.push(tracked_blob);
+                matched_tracked_indices.insert(tracked_idx);
+            }
         }
 
-        // Handle lost blobs.
         for (i, tracked_blob) in self.tracked_blobs.iter().enumerate() {
             if !matched_tracked_indices.contains(&i) {
                 let mut lost_blob = tracked_blob.clone();
@@ -159,7 +153,6 @@ impl Tracker {
             }
         }
 
-        // Handle new blobs (births).
         for new_blob in unmatched_blobs.into_values() {
             let new_tracked_blob = TrackedBlob::new(self.next_id, new_blob);
             updated_tracked_blobs.push(new_tracked_blob);
@@ -170,61 +163,44 @@ impl Tracker {
         &self.tracked_blobs
     }
 
-    /// Merges smaller blobs into larger ones based on proximity and signature similarity.
-    fn merge_fragmented_blobs(&self, blobs: Vec<SmartBlob>) -> Vec<SmartBlob> {
-        // For this complex logic, a placeholder is used. A full implementation would
-        // involve graph-based clustering or iterative merging. For now, we return the
-        // blobs as-is, with the understanding that this is a major area for future enhancement.
-        blobs
-    }
-
-    /// Performs the core matching logic.
     fn match_blobs(&self, blobs: Vec<SmartBlob>) -> (Vec<(usize, usize)>, HashMap<usize, SmartBlob>) {
-        // This logic remains largely the same as before.
-        // ... returns matches and a map of the remaining unmatched blobs ...
-        (Vec::new(), HashMap::new()) // Placeholder
+        let mut matches = Vec::new();
+        let unmatched_blobs: HashMap<usize, SmartBlob> = blobs.into_iter().enumerate().collect();
+        let mut used_blob_indices = HashSet::new();
+
+        for (i, tracked_blob) in self.tracked_blobs.iter().enumerate() {
+            let predicted_pos = tracked_blob.predict_next_position();
+            let mut best_match: Option<(usize, f64)> = None;
+
+            for (j, new_blob) in &unmatched_blobs {
+                if used_blob_indices.contains(j) { continue; }
+                let dist_sq = (predicted_pos.0 - new_blob.center_of_mass.0).powi(2) + (predicted_pos.1 - new_blob.center_of_mass.1).powi(2);
+                let dist = dist_sq.sqrt();
+                if dist < DISTANCE_THRESHOLD {
+                    if best_match.is_none() || dist < best_match.as_ref().unwrap().1 {
+                        best_match = Some((*j, dist));
+                    }
+                }
+            }
+
+            if let Some((j, _)) = best_match {
+                matches.push((i, j));
+                used_blob_indices.insert(j);
+            }
+        }
+        (matches, unmatched_blobs)
     }
 
-    /// Analyzes an existing blob's behavior to determine its state.
     fn analyze_blob_behavior(&self, blob: &mut TrackedBlob, config: &PipelineConfig) {
         if blob.age < config.new_age_threshold {
             blob.state = TrackedState::New;
             return;
         }
-
-        // Check for physical or signature instability.
-        let accel_anomaly = is_acceleration_anomalous(blob, config);
-        let size_anomaly = is_size_change_anomalous(blob, config);
-        let hue_anomaly = is_hue_change_anomalous(blob, config);
-
-        if accel_anomaly || size_anomaly || hue_anomaly {
-            blob.state = TrackedState::Anomalous;
-        } else {
-            blob.state = TrackedState::Tracking;
-        }
+        // Placeholder for future statistical analysis
+        blob.state = TrackedState::Tracking;
     }
 
     pub fn get_tracked_blobs(&self) -> &Vec<TrackedBlob> {
         &self.tracked_blobs
     }
-}
-
-// --- Behavioral Anomaly Detection Helpers ---
-
-fn is_acceleration_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
-    // Placeholder: A real implementation would calculate the mean and std dev
-    // of the velocity history and check if the current velocity is an outlier.
-    false
-}
-
-fn is_size_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
-    // Placeholder: A real implementation would analyze the rate of change of the
-    // size_history to find statistical outliers.
-    false
-}
-
-fn is_hue_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
-    // Placeholder: A real implementation would calculate the mean and std dev
-    // of the hue difference in the signature_history and check for outliers.
-    false
 }

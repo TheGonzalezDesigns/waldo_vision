@@ -2,7 +2,6 @@
 // The main library entry point is now `src/lib.rs`.
 
 // We import the pipeline from our library.
-use waldo_vision::pipeline::VisionPipeline;
 
 fn main() {
     println!("Waldo Vision Engine - Example Runner");
