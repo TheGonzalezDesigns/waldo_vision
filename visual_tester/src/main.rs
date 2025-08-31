@@ -107,12 +107,22 @@ async fn main() -> opencv::Result<()> {
 // Helper functions (draw_tracked_blobs, state_to_color, apply_dimming_and_heat) remain the same
 fn draw_tracked_blobs(frame: &mut Mat, tracked_blobs: &[TrackedBlob], chunk_w: u32, chunk_h: u32) {
     for blob in tracked_blobs {
+        let color = state_to_color(&blob.state);
+
+        // Draw the precise, chunk-by-chunk outline of the blob.
+        for point in &blob.latest_blob.chunk_coords {
+            let top_left = core::Point::new(point.x as i32 * chunk_w as i32, point.y as i32 * chunk_h as i32);
+            let rect = Rect::new(top_left.x, top_left.y, chunk_w as i32, chunk_h as i32);
+            let mut roi = Mat::roi(frame, rect).unwrap();
+            let mut color_mat = Mat::new_size_with_default(roi.size().unwrap(), roi.typ(), color).unwrap();
+            core::add_weighted(&roi, 0.5, &color_mat, 0.5, 0.0, &mut roi, -1).unwrap();
+        }
+
+        // Draw the summary bounding box over the top.
         let (top_left_p, bottom_right_p) = blob.latest_blob.bounding_box;
         let top_left = core::Point::new(top_left_p.x as i32 * chunk_w as i32, top_left_p.y as i32 * chunk_h as i32);
         let bottom_right = core::Point::new((bottom_right_p.x + 1) as i32 * chunk_w as i32, (bottom_right_p.y + 1) as i32 * chunk_h as i32);
         let rect = Rect::new(top_left.x, top_left.y, bottom_right.x - top_left.x, bottom_right.y - top_left.y);
-
-        let color = state_to_color(&blob.state);
         imgproc::rectangle(frame, rect, color, 2, imgproc::LINE_8, 0).unwrap();
 
         let label = format!("ID: {} | S: {:?} | A: {}", blob.id, blob.state, blob.age);
