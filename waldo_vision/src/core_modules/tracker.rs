@@ -230,14 +230,23 @@ fn is_acceleration_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> boo
 
 fn is_size_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
     if blob.size_history.len() < HISTORY_SIZE / 2 { return false; }
-    let size_changes: Vec<f64> = blob.size_history.as_slices().0.windows(2).map(|w| (w[1] as f64 - w[0] as f64)).collect();
+
+    // Calculate the history of size *changes*, casting to i64 before subtracting to handle shrinkage.
+    let size_changes: Vec<f64> = blob.size_history
+        .as_slices().0
+        .windows(2)
+        .map(|w| (w[1] as i64 - w[0] as i64) as f64)
+        .collect();
+
     if size_changes.len() < 2 { return false; }
 
     let (mean, std_dev) = calculate_scalar_stats(&size_changes);
-    if blob.size_history.len() < 2 { return false; }
-    let current_change = (blob.size_history.back().unwrap() - blob.size_history.get(blob.size_history.len() - 2).unwrap()) as f64;
+    
+    // It's safe to unwrap here because we've already confirmed the history length.
+    let current_change = (*blob.size_history.back().unwrap() as i64 - *blob.size_history.get(blob.size_history.len() - 2).unwrap() as i64) as f64;
 
-    (current_change - mean) / std_dev.max(0.01) > config.behavioral_anomaly_threshold
+    // We care about any large deviation, positive or negative.
+    (current_change - mean).abs() / std_dev.max(0.01) > config.behavioral_anomaly_threshold
 }
 
 fn is_hue_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
