@@ -51,7 +51,7 @@ async fn main() -> opencv::Result<()> {
         absolute_min_blob_size: 2,
         blob_size_std_dev_filter: 2.0,
     });
-    let pipeline = Arc::new(Mutex::new(VisionPipeline::new(config.clone())));
+    let pipeline = Arc::new(Mutex::new(VisionPipeline::new((&*config).clone())));
 
     // --- 5. Parallel Frame Processing ---
     println!("Processing frames in parallel...");
