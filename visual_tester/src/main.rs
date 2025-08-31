@@ -5,7 +5,7 @@ use opencv::{
     videoio::{self, VideoCapture, VideoWriter},
 };
 use std::env;
-use waldo_vision::pipeline::{ChunkStatus, PipelineConfig, VisionPipeline};
+use waldo_vision::pipeline::{ChunkStatus, PipelineConfig, TrackedBlob, VisionPipeline};
 
 fn main() -> opencv::Result<()> {
     // --- 1. Argument Parsing & Setup ---

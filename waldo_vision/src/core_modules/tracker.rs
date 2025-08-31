@@ -128,17 +128,36 @@ impl Tracker {
 
     /// Updates the tracker with a new set of detected blobs for the current frame.
     pub fn update(&mut self, new_blobs: Vec<SmartBlob>) -> &Vec<TrackedBlob> {
+        // --- 0. Spatial Pre-filtering ---
+        // Filter out new blobs that are likely just internal noise of existing tracks.
+        let mut legitimate_new_blobs: Vec<SmartBlob> = Vec::new();
+        for new_blob in new_blobs {
+            let mut is_internal_noise = false;
+            for tracked_blob in &self.tracked_blobs {
+                let (top_left, bottom_right) = tracked_blob.latest_blob.bounding_box;
+                let (cx, cy) = new_blob.center_of_mass;
+                if cx >= top_left.x as f64 && cx <= bottom_right.x as f64 &&
+                   cy >= top_left.y as f64 && cy <= bottom_right.y as f64 {
+                    is_internal_noise = true;
+                    break;
+                }
+            }
+            if !is_internal_noise {
+                legitimate_new_blobs.push(new_blob);
+            }
+        }
+
         let mut matches: Vec<(usize, usize)> = Vec::new(); // (tracked_index, new_blob_index)
         let mut matched_new_blob_indices: HashSet<usize> = HashSet::new();
 
         // --- 1. Matching ---
-        // Find the best match for each existing tracked blob.
+        // Find the best match for each existing tracked blob using the legitimate blobs.
         for (i, tracked_blob) in self.tracked_blobs.iter().enumerate() {
             let predicted_pos = tracked_blob.predict_next_position();
             let mut best_match_dist = DISTANCE_THRESHOLD;
             let mut best_match_index: Option<usize> = None;
 
-            for (j, new_blob) in new_blobs.iter().enumerate() {
+            for (j, new_blob) in legitimate_new_blobs.iter().enumerate() {
                 // Skip new blobs that have already been matched.
                 if matched_new_blob_indices.contains(&j) {
                     continue;
@@ -167,7 +186,7 @@ impl Tracker {
         // Update blobs that were successfully matched.
         for (i, j) in matches {
             let mut tracked_blob = self.tracked_blobs[i].clone();
-            tracked_blob.update(new_blobs[j].clone()); // `new_blobs` needs to be mutable or cloned
+            tracked_blob.update(legitimate_new_blobs[j].clone());
             updated_tracked_blobs.push(tracked_blob);
             matched_tracked_indices.insert(i);
         }
@@ -184,7 +203,7 @@ impl Tracker {
         }
 
         // Handle new blobs that were not matched (birth).
-        for (j, new_blob) in new_blobs.into_iter().enumerate() {
+        for (j, new_blob) in legitimate_new_blobs.into_iter().enumerate() {
             if !matched_new_blob_indices.contains(&j) {
                 let new_tracked_blob = TrackedBlob::new(self.next_id, new_blob);
                 updated_tracked_blobs.push(new_tracked_blob);
