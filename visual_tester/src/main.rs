@@ -113,9 +113,12 @@ fn draw_tracked_blobs(frame: &mut Mat, tracked_blobs: &[TrackedBlob], chunk_w: u
         for point in &blob.latest_blob.chunk_coords {
             let top_left = core::Point::new(point.x as i32 * chunk_w as i32, point.y as i32 * chunk_h as i32);
             let rect = Rect::new(top_left.x, top_left.y, chunk_w as i32, chunk_h as i32);
-            let mut roi = Mat::roi(frame, rect).unwrap();
-            let mut color_mat = Mat::new_size_with_default(roi.size().unwrap(), roi.typ(), color).unwrap();
-            core::add_weighted(&roi, 0.5, &color_mat, 0.5, 0.0, &mut roi, -1).unwrap();
+            
+            let roi = Mat::roi(frame, rect).unwrap();
+            let mut colored_roi = Mat::default();
+            let color_mat = Mat::new_size_with_default(roi.size().unwrap(), roi.typ(), color).unwrap();
+            core::add_weighted(&roi, 0.5, &color_mat, 0.5, 0.0, &mut colored_roi, -1).unwrap();
+            colored_roi.copy_to(&mut Mat::roi(frame, rect).unwrap()).unwrap();
         }
 
         // Draw the summary bounding box over the top.
@@ -150,7 +153,7 @@ fn apply_dimming_and_heat(frame: &mut Mat, heatmap: &mut Mat, status_map: &[Chun
 
         match status {
             ChunkStatus::Stable | ChunkStatus::Learning => {
-                let mut roi = Mat::roi(frame, rect).unwrap();
+                let roi = Mat::roi(frame, rect).unwrap();
                 let mut dimmed_roi = Mat::default();
                 core::multiply(&roi, &Scalar::all(0.4), &mut dimmed_roi, 1.0, -1).unwrap();
                 dimmed_roi.copy_to(&mut Mat::roi(frame, rect).unwrap()).unwrap();
