@@ -43,6 +43,8 @@ pub struct TrackedBlob {
     pub latest_blob: SmartBlob,
     /// A recent history of the object's center of mass, used for velocity calculation.
     pub position_history: VecDeque<(f64, f64)>,
+    /// A recent history of the object's size in chunks, used for size change analysis.
+    pub size_history: VecDeque<usize>,
     /// The calculated velocity of the object in chunks per frame.
     pub velocity: (f64, f64),
     /// The number of consecutive frames this object has been tracked.
@@ -56,10 +58,13 @@ impl TrackedBlob {
     fn new(id: u64, blob: SmartBlob) -> Self {
         let mut position_history = VecDeque::with_capacity(POSITION_HISTORY_SIZE);
         position_history.push_back(blob.center_of_mass);
+        let mut size_history = VecDeque::with_capacity(POSITION_HISTORY_SIZE);
+        size_history.push_back(blob.size_in_chunks);
         Self {
             id,
             latest_blob: blob,
             position_history,
+            size_history,
             velocity: (0.0, 0.0),
             age: 1,
             frames_since_seen: 0,
@@ -73,6 +78,11 @@ impl TrackedBlob {
             .push_back(self.latest_blob.center_of_mass);
         if self.position_history.len() > POSITION_HISTORY_SIZE {
             self.position_history.pop_front();
+        }
+
+        self.size_history.push_back(self.latest_blob.size_in_chunks);
+        if self.size_history.len() > POSITION_HISTORY_SIZE {
+            self.size_history.pop_front();
         }
 
         // Calculate new velocity based on the last two positions.

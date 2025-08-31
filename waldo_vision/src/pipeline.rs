@@ -46,18 +46,15 @@ pub struct PipelineConfig {
     pub chunk_width: u32,
     /// The height of a single chunk, in pixels.
     pub chunk_height: u32,
-    /// A `Moment` must persist for at least this many frames to be considered significant.
-    /// This acts as a temporal filter to remove fleeting, unimportant events.
-    pub min_moment_age_for_significance: u32,
-    /// An anomaly in a `SmartChunk` must have a statistical significance score (Z-score)
-    /// greater than this value to be included in a `SmartBlob`.
-    pub significance_threshold: f64,
-    /// The absolute minimum number of chunks a `SmartBlob` must contain to not be
-    /// immediately discarded as noise. This is the first stage of blob filtering.
-    pub absolute_min_blob_size: usize,
+    /// A `Moment` is only reported as significant if it's a "birth" event younger than this many frames.
+    /// This captures the initial appearance of an object.
+    pub significance_age_threshold: u32,
     /// The statistical filter for blob size. A blob will be discarded if its size (in chunks)
     /// is more than this many standard deviations below the mean of recent blob sizes.
     pub blob_size_std_dev_filter: f64,
+    /// The absolute minimum number of chunks a `SmartBlob` must contain to not be
+    /// immediately discarded as noise. This is the first stage of blob filtering.
+    pub absolute_min_blob_size: usize,
 }
 
 /// The detailed data package for a significant event, returned by the `VisionPipeline`.
@@ -140,18 +137,15 @@ impl VisionPipeline {
         // Stage 3: Behavioral Analysis
         let (newly_started, newly_completed) = self.scene_manager.update(filtered_blobs);
 
-        // Stage 4: Final Decision Logic
+        // Stage 4: Final, Tracker-Aware Decision Logic
         let new_significant_moments: Vec<Moment> = newly_started
             .iter()
             .filter(|m| self.is_moment_significant(m))
             .cloned()
             .collect();
 
-        let completed_significant_moments: Vec<Moment> = newly_completed
-            .iter()
-            .filter(|m| self.is_moment_significant(m))
-            .cloned()
-            .collect();
+        // For now, we only report on new moments. Completed moments could be added later.
+        let completed_significant_moments: Vec<Moment> = Vec::new();
 
         if new_significant_moments.is_empty() && completed_significant_moments.is_empty() {
             Report::NoSignificantMention
@@ -165,11 +159,8 @@ impl VisionPipeline {
 
     /// Applies a multi-stage filtering process to raw blobs to remove noise.
     fn filter_blobs(&mut self, blobs: Vec<SmartBlob>) -> Vec<SmartBlob> {
-        // Calculate statistics from our recent history.
         let (mean, std_dev) = {
-            if self.blob_size_history.is_empty() {
-                (0.0, 0.0)
-            } else {
+            if self.blob_size_history.is_empty() { (0.0, 0.0) } else {
                 let sum: usize = self.blob_size_history.iter().sum();
                 let mean = sum as f64 / self.blob_size_history.len() as f64;
                 let variance = self.blob_size_history.iter()
@@ -181,48 +172,31 @@ impl VisionPipeline {
 
         let mut filtered_blobs = Vec::new();
         for blob in blobs {
-            // Stage 1: Absolute Minimum Filter
-            if blob.size_in_chunks < self.config.absolute_min_blob_size {
-                continue;
-            }
-
-            // Stage 2: Statistical Outlier Filter
-            if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH / 2 { // Wait for some history
+            if blob.size_in_chunks < self.config.absolute_min_blob_size { continue; }
+            if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH / 2 {
                 let threshold = mean - self.config.blob_size_std_dev_filter * std_dev;
-                if (blob.size_in_chunks as f64) < threshold {
-                    continue;
-                }
+                if (blob.size_in_chunks as f64) < threshold { continue; }
             }
-
-            // If the blob passed all filters, add it to the list.
             filtered_blobs.push(blob);
         }
 
-        // Update the history with the sizes of the blobs that passed the filter.
         for blob in &filtered_blobs {
             if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH {
                 self.blob_size_history.pop_front();
             }
             self.blob_size_history.push_back(blob.size_in_chunks);
         }
-
         filtered_blobs
     }
 
-    /// Analyzes a moment based on the pipeline's configuration to determine if it's significant.
+    /// Analyzes a moment to determine if it's significant based on tracker-aware logic.
     fn is_moment_significant(&self, moment: &Moment) -> bool {
-        // Rule 1: The moment must have a minimum duration.
+        // The primary rule for significance: is this a "birth" event?
+        // We consider a moment significant if it's new (i.e., its age is very young).
+        // This captures the initial appearance of an object, which is the most important event.
+        // We no longer need to check every blob in the history, which solves the re-triggering issue.
         let age = moment.end_frame - moment.start_frame;
-        if age < self.config.min_moment_age_for_significance as u64 {
-            return false;
-        }
-
-        // Rule 2: At least one blob in the moment's history must have an anomaly score
-        // that exceeds our significance threshold.
-        moment
-            .blob_history
-            .iter()
-            .any(|blob| blob.average_anomaly.luminance_score >= self.config.significance_threshold)
+        age <= self.config.significance_age_threshold as u64
     }
 
     /// Returns a slice of the ChunkStatus map from the most recently processed frame.
