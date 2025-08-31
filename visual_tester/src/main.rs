@@ -7,7 +7,7 @@ use opencv::{
 use std::env;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinSet;
-use waldo_vision::pipeline::{ChunkStatus, FrameAnalysis, PipelineConfig, TrackedBlob, TrackedState, VisionPipeline};
+use waldo_vision::pipeline::{ChunkStatus, FrameAnalysis, PipelineConfig, SignificanceRecipe, TrackedBlob, TrackedState, VisionPipeline};
 
 #[tokio::main]
 async fn main() -> opencv::Result<()> {
@@ -46,7 +46,12 @@ async fn main() -> opencv::Result<()> {
         behavioral_anomaly_threshold: 3.0,
         absolute_min_blob_size: 2,
         blob_size_std_dev_filter: 2.0,
-        global_disturbance_threshold: 0.05, // A 5% spike in entropy is a disturbance.
+        global_disturbance_threshold: 0.05,
+    });
+    let recipe = Arc::new(SignificanceRecipe {
+        trigger_on_new_moment: true,
+        trigger_on_anomalous_behavior: true,
+        trigger_on_global_disturbance: true,
     });
     let pipeline = Arc::new(Mutex::new(VisionPipeline::new((*config).clone())));
 
@@ -55,6 +60,7 @@ async fn main() -> opencv::Result<()> {
     for (i, frame) in frames.into_iter().enumerate() {
         let pipeline_clone = Arc::clone(&pipeline);
         let config_clone = Arc::clone(&config);
+        let recipe_clone = Arc::clone(&recipe);
         join_set.spawn(async move {
             let mut pipeline = pipeline_clone.lock().unwrap();
             
@@ -62,14 +68,15 @@ async fn main() -> opencv::Result<()> {
             imgproc::cvt_color(&frame, &mut rgba_frame, imgproc::COLOR_BGR2RGBA, 0).unwrap();
             let frame_buffer: Vec<u8> = rgba_frame.data_bytes().unwrap().to_vec();
 
-            let analysis = pipeline.process_frame(&frame_buffer);
+            let is_significant = pipeline.is_significant(&frame_buffer, &recipe_clone);
+            let analysis = pipeline.process_frame(&frame_buffer); // We still need the full analysis for visualization
 
             let mut output_frame = frame.clone();
             let mut heatmap_overlay = Mat::new_size_with_default(frame.size().unwrap(), core::CV_8UC3, Scalar::all(0.0)).unwrap();
             
             apply_dimming_and_heat(&mut output_frame, &mut heatmap_overlay, &analysis.status_map, frame_width, config_clone.chunk_width, config_clone.chunk_height);
             draw_tracked_blobs(&mut output_frame, &analysis.tracked_blobs, config_clone.chunk_width, config_clone.chunk_height);
-            draw_header(&mut output_frame, i, &analysis);
+            draw_header(&mut output_frame, i, &analysis, is_significant);
 
             let mut final_frame = Mat::default();
             core::add_weighted(&output_frame, 1.0, &heatmap_overlay, 0.8, 0.0, &mut final_frame, -1).unwrap();
@@ -95,10 +102,11 @@ async fn main() -> opencv::Result<()> {
     Ok(())
 }
 
-fn draw_header(frame: &mut Mat, frame_index: usize, analysis: &FrameAnalysis) {
+fn draw_header(frame: &mut Mat, frame_index: usize, analysis: &FrameAnalysis, is_significant: bool) {
     let header_height = 40;
     let rect = Rect::new(0, 0, frame.cols(), header_height);
-    imgproc::rectangle(frame, rect, Scalar::new(0.0, 0.0, 0.0, 0.0), -1, imgproc::LINE_8, 0).unwrap();
+    let header_color = if is_significant { Scalar::new(0.0, 69.0, 255.0, 0.0) } else { Scalar::new(0.0, 0.0, 0.0, 0.0) }; // Orange for significant, black otherwise
+    imgproc::rectangle(frame, rect, header_color, -1, imgproc::LINE_8, 0).unwrap();
 
     let entropy_text = format!("{:.2}", analysis.scene_entropy_score);
     let event_text = format!("Frame: {} | Scene Entropy: {} | Events: {}", frame_index, entropy_text, analysis.significant_event_count);
