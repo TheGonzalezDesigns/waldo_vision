@@ -42,8 +42,7 @@ fn main() -> opencv::Result<()> {
         image_height: frame_height,
         chunk_width: 10,
         chunk_height: 10,
-        min_moment_age_for_significance: 5,
-        significance_threshold: 3.0,
+        significance_age_threshold: 5, // Report moments that are 5 frames old or younger.
         absolute_min_blob_size: 2, // A blob must be at least 2 chunks to be considered.
         blob_size_std_dev_filter: 2.0, // Filter blobs 2 std devs below the mean size.
     };
