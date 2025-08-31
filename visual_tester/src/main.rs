@@ -50,6 +50,7 @@ async fn main() -> opencv::Result<()> {
         behavioral_anomaly_threshold: 3.0,
         absolute_min_blob_size: 2,
         blob_size_std_dev_filter: 2.0,
+        global_disturbance_threshold: 0.25,
     });
     let pipeline = Arc::new(Mutex::new(VisionPipeline::new((&*config).clone())));
 
