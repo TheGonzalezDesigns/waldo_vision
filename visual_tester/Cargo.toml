@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 waldo_vision = { path = "../waldo_vision" }
 opencv = { version = "0.88.8", default-features = false, features = ["videoio", "highgui", "imgproc"] }
+tokio = { version = "1", features = ["full"] }
