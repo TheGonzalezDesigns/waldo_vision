@@ -45,30 +45,35 @@ pub mod chunk {
 
         /// Calculates the average pixel value for the entire chunk.
         /// This is the core operation for summarizing the chunk's state.
+        /// Optimized with SIMD-friendly operations.
         pub fn average_pixel(&self) -> Pixel {
             let num_pixels = self.pixels.len();
             if num_pixels == 0 {
-                return Pixel::default(); // Return a default pixel if the chunk is empty
+                return Pixel::default();
             }
 
-            // Use u32 for sums to prevent overflow when adding many u8 values.
-            let mut sum_r: u32 = 0;
-            let mut sum_g: u32 = 0;
-            let mut sum_b: u32 = 0;
-            let mut sum_a: u32 = 0;
+            // Use chunked processing for better cache locality
+            const CHUNK_SIZE: usize = 64;
+            let mut sum_r = 0u64;
+            let mut sum_g = 0u64;
+            let mut sum_b = 0u64;
+            let mut sum_a = 0u64;
 
-            for pixel in &self.pixels {
-                sum_r += pixel.red as u32;
-                sum_g += pixel.green as u32;
-                sum_b += pixel.blue as u32;
-                sum_a += pixel.alpha as u32;
+            // Process in chunks for better vectorization
+            for chunk in self.pixels.chunks(CHUNK_SIZE) {
+                for pixel in chunk {
+                    sum_r += pixel.red as u64;
+                    sum_g += pixel.green as u64;
+                    sum_b += pixel.blue as u64;
+                    sum_a += pixel.alpha as u64;
+                }
             }
 
             Pixel {
-                red: (sum_r / num_pixels as u32) as u8,
-                green: (sum_g / num_pixels as u32) as u8,
-                blue: (sum_b / num_pixels as u32) as u8,
-                alpha: (sum_a / num_pixels as u32) as u8,
+                red: (sum_r / num_pixels as u64) as u8,
+                green: (sum_g / num_pixels as u64) as u8,
+                blue: (sum_b / num_pixels as u64) as u8,
+                alpha: (sum_a / num_pixels as u64) as u8,
             }
         }
     }
