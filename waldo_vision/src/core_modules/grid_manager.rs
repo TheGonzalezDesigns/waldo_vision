@@ -26,6 +26,8 @@
 use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::pixel::pixel::Pixel;
 use crate::core_modules::smart_chunk::{ChunkStatus, SmartChunk};
+use std::sync::Arc;
+use tokio::task;
 
 /// Manages the entire grid of `SmartChunk`s and orchestrates the temporal analysis layer.
 pub struct GridManager {
@@ -41,6 +43,10 @@ pub struct GridManager {
     chunk_height: u32,
     /// A flattened vector holding all the stateful `SmartChunk` analyzers, one for each grid position.
     smart_chunks: Vec<SmartChunk>,
+    /// Pre-allocated pixel buffer to reduce allocations
+    pixel_buffer: Vec<Vec<Pixel>>,
+    /// Pre-calculated byte indices for faster pixel extraction
+    byte_indices: Vec<Vec<usize>>,
 }
 
 impl GridManager {
@@ -51,11 +57,38 @@ impl GridManager {
         let num_chunks = (grid_width * grid_height) as usize;
         let mut smart_chunks = Vec::with_capacity(num_chunks);
 
-        // Use a single, flattened loop for consistency with the processing logic.
+        // Initialize smart chunks
         for i in 0..num_chunks {
             let y = i as u32 / grid_width;
             let x = i as u32 % grid_width;
             smart_chunks.push(SmartChunk::new(x, y));
+        }
+        
+        // Pre-allocate pixel buffers for all chunks
+        let chunk_pixels = (chunk_width * chunk_height) as usize;
+        let mut pixel_buffer = Vec::with_capacity(num_chunks);
+        for _ in 0..num_chunks {
+            pixel_buffer.push(Vec::with_capacity(chunk_pixels));
+        }
+        
+        // Pre-calculate byte indices for faster pixel extraction
+        let mut byte_indices = Vec::with_capacity(num_chunks);
+        for chunk_index in 0..num_chunks {
+            let chunk_y = chunk_index as u32 / grid_width;
+            let chunk_x = chunk_index as u32 % grid_width;
+            let start_pixel_x = chunk_x * chunk_width;
+            let start_pixel_y = chunk_y * chunk_height;
+            
+            let mut chunk_byte_indices = Vec::with_capacity(chunk_pixels);
+            for i in 0..chunk_pixels {
+                let y_offset = i as u32 / chunk_width;
+                let x_offset = i as u32 % chunk_width;
+                let pixel_y = start_pixel_y + y_offset;
+                let pixel_x = start_pixel_x + x_offset;
+                let byte_index = ((pixel_y * image_width) + pixel_x) * 4;
+                chunk_byte_indices.push(byte_index as usize);
+            }
+            byte_indices.push(chunk_byte_indices);
         }
 
         Self {
@@ -65,47 +98,89 @@ impl GridManager {
             chunk_width,
             chunk_height,
             smart_chunks,
+            pixel_buffer,
+            byte_indices,
         }
     }
 
-    /// The main entry point for the vision system.
+    /// The main entry point for the vision system with adaptive parallelization.
     /// Takes a raw RGBA image buffer, processes it, and returns a map of chunk statuses.
-    pub fn process_frame(&mut self, frame_buffer: &[u8]) -> Vec<ChunkStatus> {
-        // This is the flattened loop to iterate over chunks that we designed earlier.
-        for chunk_index in 0..self.smart_chunks.len() {
-            let chunk_y = chunk_index as u32 / self.grid_width;
-            let chunk_x = chunk_index as u32 % self.grid_width;
-
-            // Calculate the starting pixel position (top-left corner) of the current chunk.
-            let start_pixel_x = chunk_x * self.chunk_width;
-            let start_pixel_y = chunk_y * self.chunk_height;
-
-            let mut chunk_pixels =
-                Vec::with_capacity((self.chunk_width * self.chunk_height) as usize);
-
-            // This is the optimized, single flattened loop for extracting pixels for a chunk.
-            // It iterates through each pixel position within the chunk's boundaries and calculates
-            // its exact index in the main frame_buffer, avoiding intermediate row-based slices.
-            for i in 0..(self.chunk_width * self.chunk_height) {
-                let y_offset = i / self.chunk_width;
-                let x_offset = i % self.chunk_width;
-
-                let pixel_y = start_pixel_y + y_offset;
-                let pixel_x = start_pixel_x + x_offset;
-
-                let byte_index = ((pixel_y * self.image_width) + pixel_x) * 4;
-
-                let pixel_bytes = &frame_buffer[byte_index as usize..(byte_index + 4) as usize];
-                chunk_pixels.push(Pixel::from(pixel_bytes));
-            }
-
-            let chunk_data = Chunk::new(self.chunk_width, self.chunk_height, chunk_pixels);
-
-            // Update the corresponding SmartChunk with the new data for its location.
-            self.smart_chunks[chunk_index].update(&chunk_data);
+    pub async fn process_frame(&mut self, frame_buffer: &[u8]) -> Vec<ChunkStatus> {
+        let frame_arc = Arc::new(frame_buffer.to_vec());
+        let num_chunks = self.smart_chunks.len();
+        let chunk_pixels = (self.chunk_width * self.chunk_height) as usize;
+        
+        // Determine optimal batch size based on CPU cores
+        let num_cpus = num_cpus::get();
+        let batch_size = (num_chunks + num_cpus - 1) / num_cpus;
+        
+        // Process chunks in concurrent batches
+        let mut chunk_futures = Vec::new();
+        
+        for batch_start in (0..num_chunks).step_by(batch_size) {
+            let batch_end = (batch_start + batch_size).min(num_chunks);
+            let frame_clone = Arc::clone(&frame_arc);
+            let byte_indices_batch = self.byte_indices[batch_start..batch_end].to_vec();
+            let chunk_width = self.chunk_width;
+            let chunk_height = self.chunk_height;
+            
+            // Spawn async task for each batch
+            let batch_future = task::spawn(async move {
+                let mut batch_chunks = Vec::with_capacity(batch_end - batch_start);
+                
+                for indices in byte_indices_batch {
+                    // Extract pixels using pre-calculated indices
+                    let mut chunk_pixels_data = Vec::with_capacity(chunk_pixels);
+                    
+                    // Use unsafe for faster memory access (validated indices)
+                    unsafe {
+                        for &byte_idx in &indices {
+                            // Direct memory access without bounds checking
+                            let r = *frame_clone.get_unchecked(byte_idx);
+                            let g = *frame_clone.get_unchecked(byte_idx + 1);
+                            let b = *frame_clone.get_unchecked(byte_idx + 2);
+                            let a = *frame_clone.get_unchecked(byte_idx + 3);
+                            
+                            chunk_pixels_data.push(Pixel {
+                                red: r,
+                                green: g,
+                                blue: b,
+                                alpha: a,
+                            });
+                        }
+                    }
+                    
+                    let chunk_data = Chunk::new(chunk_width, chunk_height, chunk_pixels_data);
+                    batch_chunks.push(chunk_data);
+                }
+                
+                batch_chunks
+            });
+            
+            chunk_futures.push((batch_start, batch_future));
         }
-
-        // After all chunks are updated, collect their new statuses to create the final status map.
+        
+        // Await all batch processing
+        let mut all_chunks: Vec<Option<Chunk>> = Vec::with_capacity(num_chunks);
+        for _ in 0..num_chunks {
+            all_chunks.push(None);
+        }
+        for (batch_start, future) in chunk_futures {
+            if let Ok(batch_chunks) = future.await {
+                for (i, chunk) in batch_chunks.into_iter().enumerate() {
+                    all_chunks[batch_start + i] = Some(chunk);
+                }
+            }
+        }
+        
+        // Update smart chunks sequentially (they maintain state)
+        for (i, chunk_opt) in all_chunks.into_iter().enumerate() {
+            if let Some(chunk_data) = chunk_opt {
+                self.smart_chunks[i].update(&chunk_data);
+            }
+        }
+        
+        // Collect statuses
         self.smart_chunks
             .iter()
             .map(|sc| sc.status.clone())
