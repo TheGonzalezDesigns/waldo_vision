@@ -1,5 +1,22 @@
 # Waldo Vision - Release Notes
 
+## Version 0.2.0 - "Refinement"
+
+**Release Date**: 2025-09-01
+
+This release focuses on refining the core engine, improving the stability of the pipeline, and providing a more flexible and configurable API.
+
+---
+
+### Key Features & Capabilities
+
+*   **Configurable Significance API**: The `significance_recipe` in `PipelineConfig` allows for more granular control over what is considered a "significant event".
+*   **Scene Stability State Machine**: A new state machine (`SceneState`) has been implemented to analyze the stability of the scene. This helps to reduce false positives by tracking whether the scene is `Stable`, `Volatile`, or in a state of global `Disturbance`.
+*   **Hysteresis for Scene State**: The state machine uses hysteresis (separate entry and exit thresholds) to prevent rapid flickering between states, making the overall analysis more robust.
+*   **API Finalization**: The public API has been finalized and stabilized for this release, providing a solid foundation for future development.
+
+---
+
 ## Version 0.1.0 - "Architect"
 
 **Release Date**: 2025-08-30
