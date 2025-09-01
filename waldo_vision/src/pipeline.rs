@@ -98,15 +98,15 @@ impl VisionPipeline {
         }
     }
 
-    pub fn process_frame(&mut self, frame_buffer: &[u8]) -> FrameAnalysis {
-        let status_map = self.grid_manager.process_frame(frame_buffer);
+    pub async fn process_frame(&mut self, frame_buffer: &[u8]) -> FrameAnalysis {
+        let status_map = self.grid_manager.process_frame(frame_buffer).await;
         self.analyze_scene_stability(&status_map);
 
         let raw_blobs = blob_detector::find_blobs(
             &status_map,
             self.config.image_width / self.config.chunk_width,
             self.config.image_height / self.config.chunk_height,
-        );
+        ).await;
         let filtered_blobs = self.filter_blobs(raw_blobs);
         let (newly_started, newly_completed) = self.scene_manager.update(filtered_blobs, &self.config);
 
@@ -142,22 +142,28 @@ impl VisionPipeline {
             if self.blob_size_history.is_empty() { (0.0, 0.0) } else {
                 let sum: usize = self.blob_size_history.iter().sum();
                 let mean = sum as f64 / self.blob_size_history.len() as f64;
-                let variance = self.blob_size_history.iter()
+                let variance: f64 = self.blob_size_history.iter()
                     .map(|value| (*value as f64 - mean).powi(2))
                     .sum::<f64>() / self.blob_size_history.len() as f64;
                 (mean, variance.sqrt())
             }
         };
 
-        let mut filtered_blobs = Vec::new();
-        for blob in blobs {
-            if blob.size_in_chunks < self.config.absolute_min_blob_size { continue; }
-            if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH / 2 {
-                let threshold = mean - self.config.blob_size_std_dev_filter * std_dev;
-                if (blob.size_in_chunks as f64) < threshold { continue; }
-            }
-            filtered_blobs.push(blob);
-        }
+        let filtered_blobs: Vec<SmartBlob> = blobs
+            .into_iter()
+            .filter(|blob| {
+                if blob.size_in_chunks < self.config.absolute_min_blob_size { 
+                    return false;
+                }
+                if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH / 2 {
+                    let threshold = mean - self.config.blob_size_std_dev_filter * std_dev;
+                    if (blob.size_in_chunks as f64) < threshold { 
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
 
         for blob in &filtered_blobs {
             if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH {
