@@ -26,9 +26,7 @@
 use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::pixel::pixel::Pixel;
 use crate::core_modules::smart_chunk::{ChunkStatus, SmartChunk};
-use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task;
 
 /// Message type for SmartChunk actors
 enum ChunkMessage {
@@ -50,6 +48,8 @@ pub struct GridManager {
     chunk_height: u32,
     /// Channels to communicate with SmartChunk actors
     chunk_actors: Vec<mpsc::Sender<ChunkMessage>>,
+    /// Direct SmartChunk instances for zero-copy processing
+    smart_chunks: Vec<SmartChunk>,
 }
 
 impl GridManager {
@@ -84,6 +84,14 @@ impl GridManager {
             chunk_actors.push(tx);
         }
 
+        // Also create direct SmartChunk instances for zero-copy mode
+        let mut smart_chunks = Vec::with_capacity(num_chunks);
+        for i in 0..num_chunks {
+            let y = i as u32 / grid_width;
+            let x = i as u32 % grid_width;
+            smart_chunks.push(SmartChunk::new(x, y));
+        }
+
         Self {
             image_width,
             grid_width,
@@ -91,65 +99,45 @@ impl GridManager {
             chunk_width,
             chunk_height,
             chunk_actors,
+            smart_chunks,
         }
     }
 
     /// The main entry point for the vision system with actor-based parallelism.
     /// Takes a raw RGBA image buffer, processes it, and returns a map of chunk statuses.
     pub async fn process_frame(&mut self, frame_buffer: &[u8]) -> Vec<ChunkStatus> {
-        let num_chunks = self.chunk_actors.len();
-        let frame_arc = Arc::new(frame_buffer.to_vec());
+        let num_chunks = self.smart_chunks.len();
+        let mut status_map = Vec::with_capacity(num_chunks);
         
-        // Spawn parallel tasks to extract pixels and send to actors
-        let mut update_tasks = Vec::with_capacity(num_chunks);
-        
+        // Process chunks synchronously for zero-copy performance
         for chunk_index in 0..num_chunks {
             let chunk_y = chunk_index as u32 / self.grid_width;
             let chunk_x = chunk_index as u32 % self.grid_width;
             let start_pixel_x = chunk_x * self.chunk_width;
             let start_pixel_y = chunk_y * self.chunk_height;
             
-            let frame_clone = Arc::clone(&frame_arc);
-            let chunk_width = self.chunk_width;
-            let chunk_height = self.chunk_height;
-            let image_width = self.image_width;
-            let tx = self.chunk_actors[chunk_index].clone();
+            // Extract pixels directly from frame buffer (zero-copy)
+            let mut chunk_pixels = Vec::with_capacity((self.chunk_width * self.chunk_height) as usize);
             
-            // Spawn task to extract pixels and send to actor
-            let task = tokio::spawn(async move {
-                // Extract pixels for this chunk
-                let mut chunk_pixels = Vec::with_capacity((chunk_width * chunk_height) as usize);
+            for i in 0..(self.chunk_width * self.chunk_height) {
+                let y_offset = i / self.chunk_width;
+                let x_offset = i % self.chunk_width;
+                let pixel_y = start_pixel_y + y_offset;
+                let pixel_x = start_pixel_x + x_offset;
+                let byte_index = ((pixel_y * self.image_width) + pixel_x) * 4;
                 
-                for i in 0..(chunk_width * chunk_height) {
-                    let y_offset = i / chunk_width;
-                    let x_offset = i % chunk_width;
-                    let pixel_y = start_pixel_y + y_offset;
-                    let pixel_x = start_pixel_x + x_offset;
-                    let byte_index = ((pixel_y * image_width) + pixel_x) * 4;
-                    
-                    let pixel_bytes = &frame_clone[byte_index as usize..(byte_index + 4) as usize];
+                if byte_index + 3 < frame_buffer.len() as u32 {
+                    let pixel_bytes = &frame_buffer[byte_index as usize..(byte_index + 4) as usize];
                     chunk_pixels.push(Pixel::from(pixel_bytes));
                 }
-                
-                let chunk_data = Chunk::new(chunk_width, chunk_height, chunk_pixels);
-                
-                // Send to actor and wait for response
-                let (reply_tx, reply_rx) = oneshot::channel();
-                tx.send(ChunkMessage::Update(chunk_data, reply_tx)).await.ok();
-                reply_rx.await.ok()
-            });
-            
-            update_tasks.push(task);
-        }
-        
-        // Await all updates and collect statuses
-        let mut status_map = Vec::with_capacity(num_chunks);
-        for task in update_tasks {
-            if let Ok(Some(status)) = task.await {
-                status_map.push(status);
-            } else {
-                status_map.push(ChunkStatus::Learning);
             }
+            
+            let chunk_data = Chunk::new(self.chunk_width, self.chunk_height, chunk_pixels);
+            
+            // Process chunk directly (eliminates actor overhead)
+            self.smart_chunks[chunk_index].update(&chunk_data);
+            let status = self.smart_chunks[chunk_index].status.clone();
+            status_map.push(status);
         }
         
         status_map
