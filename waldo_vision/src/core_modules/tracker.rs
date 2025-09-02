@@ -56,6 +56,16 @@ pub struct TrackedBlob {
     pub age: u32,
     pub frames_since_seen: u32,
     pub parent_id: Option<u64>,
+    // Incremental statistics for O(1) anomaly detection
+    pub velocity_x_sum: f64,
+    pub velocity_x_sum_sq: f64,
+    pub velocity_y_sum: f64,
+    pub velocity_y_sum_sq: f64,
+    pub hue_sum: f64,
+    pub hue_sum_sq: f64,
+    pub size_change_sum: f64,
+    pub size_change_sum_sq: f64,
+    pub size_change_history: VecDeque<f64>,
 }
 
 impl TrackedBlob {
@@ -64,18 +74,29 @@ impl TrackedBlob {
         position_history.push_back(blob.center_of_mass);
         let mut size_history = VecDeque::with_capacity(HISTORY_SIZE);
         size_history.push_back(blob.size_in_chunks);
+        let mut signature_history = VecDeque::with_capacity(HISTORY_SIZE);
+        signature_history.push_back(blob.average_anomaly.clone());
         Self {
             id,
             state: TrackedState::New,
-            latest_blob: blob,
+            latest_blob: blob.clone(),
             position_history,
             size_history,
             velocity_history: VecDeque::with_capacity(HISTORY_SIZE),
-            signature_history: VecDeque::with_capacity(HISTORY_SIZE),
+            signature_history,
             velocity: (0.0, 0.0),
             age: 1,
             frames_since_seen: 0,
             parent_id: None,
+            velocity_x_sum: 0.0,
+            velocity_x_sum_sq: 0.0,
+            velocity_y_sum: 0.0,
+            velocity_y_sum_sq: 0.0,
+            hue_sum: blob.average_anomaly.hue_score,
+            hue_sum_sq: blob.average_anomaly.hue_score * blob.average_anomaly.hue_score,
+            size_change_sum: 0.0,
+            size_change_sum_sq: 0.0,
+            size_change_history: VecDeque::with_capacity(HISTORY_SIZE),
         }
     }
 
@@ -85,13 +106,54 @@ impl TrackedBlob {
         self.frames_since_seen = 0;
 
         update_history(&mut self.position_history, self.latest_blob.center_of_mass);
+        
+        // Track size changes incrementally
+        if self.size_history.len() > 0 {
+            let old_size = *self.size_history.back().unwrap();
+            let new_size = self.latest_blob.size_in_chunks;
+            let size_change = new_size as f64 - old_size as f64;
+            
+            if self.size_change_history.len() >= HISTORY_SIZE {
+                let old_change = self.size_change_history.pop_front().unwrap();
+                self.size_change_sum -= old_change;
+                self.size_change_sum_sq -= old_change * old_change;
+            }
+            
+            self.size_change_sum += size_change;
+            self.size_change_sum_sq += size_change * size_change;
+            self.size_change_history.push_back(size_change);
+        }
+        
         update_history(&mut self.size_history, self.latest_blob.size_in_chunks);
+        
+        // Update hue statistics incrementally
+        let new_hue = self.latest_blob.average_anomaly.hue_score;
+        if self.signature_history.len() >= HISTORY_SIZE {
+            let old_hue = self.signature_history.front().unwrap().hue_score;
+            self.hue_sum -= old_hue;
+            self.hue_sum_sq -= old_hue * old_hue;
+        }
+        self.hue_sum += new_hue;
+        self.hue_sum_sq += new_hue * new_hue;
         update_history(&mut self.signature_history, self.latest_blob.average_anomaly.clone());
 
         if self.position_history.len() > 1 {
             let new_pos = self.position_history.back().unwrap();
             let old_pos = self.position_history.get(self.position_history.len() - 2).unwrap();
             self.velocity = (new_pos.0 - old_pos.0, new_pos.1 - old_pos.1);
+            
+            // Update velocity statistics incrementally
+            if self.velocity_history.len() >= HISTORY_SIZE {
+                let old_vel = self.velocity_history.front().unwrap();
+                self.velocity_x_sum -= old_vel.0;
+                self.velocity_x_sum_sq -= old_vel.0 * old_vel.0;
+                self.velocity_y_sum -= old_vel.1;
+                self.velocity_y_sum_sq -= old_vel.1 * old_vel.1;
+            }
+            self.velocity_x_sum += self.velocity.0;
+            self.velocity_x_sum_sq += self.velocity.0 * self.velocity.0;
+            self.velocity_y_sum += self.velocity.1;
+            self.velocity_y_sum_sq += self.velocity.1 * self.velocity.1;
             update_history(&mut self.velocity_history, self.velocity);
         }
     }
@@ -167,20 +229,47 @@ impl Tracker {
 
     fn match_blobs(&self, blobs: Vec<SmartBlob>) -> (Vec<(usize, usize)>, HashMap<usize, SmartBlob>) {
         let mut matches = Vec::new();
-        let unmatched_blobs: HashMap<usize, SmartBlob> = blobs.into_iter().enumerate().collect();
+        let mut unmatched_blobs: HashMap<usize, SmartBlob> = blobs.into_iter().enumerate().collect();
         let mut used_blob_indices = HashSet::new();
 
+        // Build spatial grid for O(1) neighbor lookups
+        const GRID_SIZE: f64 = 50.0; // Adjust based on typical blob spacing
+        let mut spatial_grid: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        
+        for (idx, blob) in &unmatched_blobs {
+            let grid_x = (blob.center_of_mass.0 / GRID_SIZE) as i32;
+            let grid_y = (blob.center_of_mass.1 / GRID_SIZE) as i32;
+            spatial_grid.entry((grid_x, grid_y))
+                .or_insert_with(Vec::new)
+                .push(*idx);
+        }
+
+        // Match tracked blobs using spatial grid
         for (i, tracked_blob) in self.tracked_blobs.iter().enumerate() {
             let predicted_pos = tracked_blob.predict_next_position();
+            let grid_x = (predicted_pos.0 / GRID_SIZE) as i32;
+            let grid_y = (predicted_pos.1 / GRID_SIZE) as i32;
+            
             let mut best_match: Option<(usize, f64)> = None;
-
-            for (j, new_blob) in &unmatched_blobs {
-                if used_blob_indices.contains(j) { continue; }
-                let dist_sq = (predicted_pos.0 - new_blob.center_of_mass.0).powi(2) + (predicted_pos.1 - new_blob.center_of_mass.1).powi(2);
-                let dist = dist_sq.sqrt();
-                if dist < DISTANCE_THRESHOLD {
-                    if best_match.is_none() || dist < best_match.as_ref().unwrap().1 {
-                        best_match = Some((*j, dist));
+            
+            // Only check neighboring grid cells (3x3 area)
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    if let Some(blob_indices) = spatial_grid.get(&(grid_x + dx, grid_y + dy)) {
+                        for &j in blob_indices {
+                            if used_blob_indices.contains(&j) { continue; }
+                            
+                            let new_blob = &unmatched_blobs[&j];
+                            let dist_sq = (predicted_pos.0 - new_blob.center_of_mass.0).powi(2) + 
+                                         (predicted_pos.1 - new_blob.center_of_mass.1).powi(2);
+                            let dist = dist_sq.sqrt();
+                            
+                            if dist < DISTANCE_THRESHOLD {
+                                if best_match.is_none() || dist < best_match.as_ref().unwrap().1 {
+                                    best_match = Some((j, dist));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -219,8 +308,14 @@ impl Tracker {
 
 fn is_acceleration_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
     if blob.velocity_history.len() < HISTORY_SIZE / 2 { return false; }
-    let (mean_vx, std_dev_vx) = calculate_vector_stats(&blob.velocity_history, |v| v.0);
-    let (mean_vy, std_dev_vy) = calculate_vector_stats(&blob.velocity_history, |v| v.1);
+    
+    let n = blob.velocity_history.len() as f64;
+    let mean_vx = blob.velocity_x_sum / n;
+    let mean_vy = blob.velocity_y_sum / n;
+    let variance_vx = (blob.velocity_x_sum_sq / n) - (mean_vx * mean_vx);
+    let variance_vy = (blob.velocity_y_sum_sq / n) - (mean_vy * mean_vy);
+    let std_dev_vx = variance_vx.sqrt();
+    let std_dev_vy = variance_vy.sqrt();
     
     let z_score_x = (blob.velocity.0 - mean_vx) / std_dev_vx.max(0.01);
     let z_score_y = (blob.velocity.1 - mean_vy) / std_dev_vy.max(0.01);
@@ -229,20 +324,24 @@ fn is_acceleration_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> boo
 }
 
 fn is_size_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
-    if blob.size_history.len() < HISTORY_SIZE / 2 { return false; }
-    let size_changes: Vec<f64> = blob.size_history.as_slices().0.windows(2).map(|w| (w[1] as f64 - w[0] as f64)).collect();
-    if size_changes.is_empty() { return false; }
-
-    let (mean, std_dev) = calculate_scalar_stats(&size_changes);
-    let current_change = (blob.size_history.back().unwrap() - blob.size_history.get(blob.size_history.len() - 2).unwrap()) as f64;
+    if blob.size_change_history.len() < HISTORY_SIZE / 2 { return false; }
+    
+    let n = blob.size_change_history.len() as f64;
+    let mean = blob.size_change_sum / n;
+    let variance = (blob.size_change_sum_sq / n) - (mean * mean);
+    let std_dev = variance.sqrt();
+    let current_change = *blob.size_change_history.back().unwrap();
 
     (current_change - mean) / std_dev.max(0.01) > config.behavioral_anomaly_threshold
 }
 
 fn is_hue_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
     if blob.signature_history.len() < HISTORY_SIZE / 2 { return false; }
-    let hue_scores: Vec<f64> = blob.signature_history.iter().map(|s| s.hue_score).collect();
-    let (mean, std_dev) = calculate_scalar_stats(&hue_scores);
+    
+    let n = blob.signature_history.len() as f64;
+    let mean = blob.hue_sum / n;
+    let variance = (blob.hue_sum_sq / n) - (mean * mean);
+    let std_dev = variance.sqrt();
     let current_hue = blob.latest_blob.average_anomaly.hue_score;
 
     (current_hue - mean) / std_dev.max(0.01) > config.behavioral_anomaly_threshold
