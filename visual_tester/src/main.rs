@@ -7,7 +7,6 @@ use opencv::{
 use std::env;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::task::JoinSet;
 use waldo_vision::pipeline::{ChunkStatus, FrameAnalysis, PipelineConfig, TrackedBlob, TrackedState, VisionPipeline};
 
 #[tokio::main]
@@ -52,94 +51,69 @@ async fn main() -> opencv::Result<()> {
         disturbance_confirmation_frames: 5,
     });
     
-    // Create a single pipeline instance
-    let mut pipeline = VisionPipeline::new((*config).clone());
+    // Create a single shared pipeline that maintains state
+    let pipeline = Arc::new(Mutex::new(VisionPipeline::new((*config).clone())));
 
-    println!("Processing frames with controlled parallelism...");
-    
-    // Process frames in small batches to avoid memory explosion
-    const BATCH_SIZE: usize = 8; // Process 8 frames at a time
+    println!("Processing frames with stateful pipeline and parallel visualization...");
     let total_frames = frames.len();
-    let mut all_processed_frames = Vec::with_capacity(total_frames);
+    let mut processed_frames = Vec::with_capacity(total_frames);
     
-    for batch_start in (0..total_frames).step_by(BATCH_SIZE) {
-        let batch_end = (batch_start + BATCH_SIZE).min(total_frames);
-        let batch_frames = &frames[batch_start..batch_end];
+    // Process frames sequentially through the pipeline to maintain state
+    // but parallelize the visualization work
+    for (i, frame) in frames.into_iter().enumerate() {
+        // Convert frame to RGBA buffer
+        let mut rgba_frame = Mat::default();
+        imgproc::cvt_color(&frame, &mut rgba_frame, imgproc::COLOR_BGR2RGBA, 0).unwrap();
+        let frame_buffer: Vec<u8> = rgba_frame.data_bytes().unwrap().to_vec();
         
-        // Process this batch in parallel
-        let mut batch_futures = JoinSet::new();
+        // Process through pipeline (maintains state)
+        let analysis = {
+            let mut pipeline = pipeline.lock().await;
+            pipeline.process_frame(&frame_buffer).await
+        };
         
-        for (local_idx, frame) in batch_frames.iter().enumerate() {
-            let frame_idx = batch_start + local_idx;
-            let frame_clone = frame.clone();
-            let config_clone = Arc::clone(&config);
+        // Visualization can be done without the pipeline lock
+        let config_clone = Arc::clone(&config);
+        let visualization_task = tokio::spawn(async move {
+            let mut output_frame = frame.clone();
+            let mut heatmap_overlay = Mat::new_size_with_default(
+                frame.size().unwrap(), 
+                core::CV_8UC3, 
+                Scalar::all(0.0)
+            ).unwrap();
             
-            // Convert frame to RGBA buffer
-            let mut rgba_frame = Mat::default();
-            imgproc::cvt_color(&frame_clone, &mut rgba_frame, imgproc::COLOR_BGR2RGBA, 0).unwrap();
-            let frame_buffer: Vec<u8> = rgba_frame.data_bytes().unwrap().to_vec();
-            
-            batch_futures.spawn(async move {
-                // Create a temporary pipeline for parallel processing
-                // This avoids lock contention
-                let mut temp_pipeline = VisionPipeline::new((*config_clone).clone());
-                let analysis = temp_pipeline.process_frame(&frame_buffer).await;
-                
-                // Process visualization
-                let mut output_frame = frame_clone.clone();
-                let mut heatmap_overlay = Mat::new_size_with_default(
-                    frame_clone.size().unwrap(), 
-                    core::CV_8UC3, 
-                    Scalar::all(0.0)
-                ).unwrap();
-                
-                apply_dimming_and_heat(
-                    &mut output_frame, 
-                    &mut heatmap_overlay, 
-                    &analysis.status_map, 
-                    config_clone.image_width, 
-                    config_clone.chunk_width, 
-                    config_clone.chunk_height
-                );
-                draw_tracked_blobs(
-                    &mut output_frame, 
-                    &analysis.tracked_blobs, 
-                    config_clone.chunk_width, 
-                    config_clone.chunk_height
-                );
-                draw_header(&mut output_frame, frame_idx, &analysis);
+            apply_dimming_and_heat(
+                &mut output_frame, 
+                &mut heatmap_overlay, 
+                &analysis.status_map, 
+                config_clone.image_width, 
+                config_clone.chunk_width, 
+                config_clone.chunk_height
+            );
+            draw_tracked_blobs(
+                &mut output_frame, 
+                &analysis.tracked_blobs, 
+                config_clone.chunk_width, 
+                config_clone.chunk_height
+            );
+            draw_header(&mut output_frame, i, &analysis);
 
-                let mut final_frame = Mat::default();
-                core::add_weighted(&output_frame, 1.0, &heatmap_overlay, 0.8, 0.0, &mut final_frame, -1).unwrap();
-                
-                (frame_idx, final_frame)
-            });
+            let mut final_frame = Mat::default();
+            core::add_weighted(&output_frame, 1.0, &heatmap_overlay, 0.8, 0.0, &mut final_frame, -1).unwrap();
+            
+            (i, final_frame)
+        });
+        
+        processed_frames.push(visualization_task.await.unwrap());
+        
+        if i % 100 == 0 {
+            println!("Processed frame {} of {}", i, total_frames);
         }
-        
-        // Collect this batch's results
-        let mut batch_results = Vec::new();
-        while let Some(res) = batch_futures.join_next().await {
-            batch_results.push(res.unwrap());
-        }
-        
-        // Sort batch results by frame index
-        batch_results.sort_by_key(|k| k.0);
-        all_processed_frames.extend(batch_results);
-        
-        // Progress indicator
-        println!("Processed frames {}-{} of {}", batch_start, batch_end.min(total_frames), total_frames);
     }
 
     println!("Writing output video...");
-    let mut writer = VideoWriter::new(
-        output_path, 
-        VideoWriter::fourcc('m', 'p', '4', 'v')?, 
-        fps, 
-        core::Size::new(frame_width as i32, frame_height as i32), 
-        true
-    )?;
-    
-    for (_, frame) in all_processed_frames {
+    let mut writer = VideoWriter::new(output_path, VideoWriter::fourcc('m', 'p', '4', 'v')?, fps, core::Size::new(frame_width as i32, frame_height as i32), true)?;
+    for (_, frame) in processed_frames {
         writer.write(&frame)?;
     }
 
@@ -148,89 +122,68 @@ async fn main() -> opencv::Result<()> {
 }
 
 fn draw_header(frame: &mut Mat, frame_index: usize, analysis: &FrameAnalysis) {
-    let text = format!("Frame {} | State: {:?} | Events: {}", 
-        frame_index, 
-        analysis.scene_state,
-        analysis.significant_event_count
-    );
-    imgproc::put_text(
-        frame, 
-        &text, 
-        core::Point::new(10, 30), 
-        imgproc::FONT_HERSHEY_SIMPLEX, 
-        0.6, 
-        Scalar::new(255.0, 255.0, 255.0, 0.0), 
-        2, 
-        imgproc::LINE_AA, 
-        false
-    ).unwrap();
+    let header_height = 40;
+    let rect = Rect::new(0, 0, frame.cols(), header_height);
+    imgproc::rectangle(frame, rect, Scalar::new(0.0, 0.0, 0.0, 0.0), -1, imgproc::LINE_8, 0).unwrap();
+
+    let status_text = format!("{:?}", analysis.scene_state);
+    let event_text = format!("Frame: {} | Scene: {} | Events: {}", frame_index, status_text, analysis.significant_event_count);
+    
+    let text_pos = core::Point::new(10, 25);
+    imgproc::put_text(frame, &event_text, text_pos, imgproc::FONT_HERSHEY_SIMPLEX, 0.7, Scalar::new(255.0, 255.0, 255.0, 0.0), 2, imgproc::LINE_AA, false).unwrap();
 }
 
-fn apply_dimming_and_heat(frame: &mut Mat, heat_overlay: &mut Mat, status_map: &[ChunkStatus], frame_width: u32, chunk_width: u32, chunk_height: u32) {
-    let grid_width = frame_width / chunk_width;
-    // O(n) where n = number of chunks
+fn apply_dimming_and_heat(frame: &mut Mat, heatmap: &mut Mat, status_map: &[ChunkStatus], width: u32, chunk_w: u32, chunk_h: u32) {
+    let grid_w = width / chunk_w;
     for (i, status) in status_map.iter().enumerate() {
-        let chunk_y = i as u32 / grid_width;
-        let chunk_x = i as u32 % grid_width;
-        let rect = Rect::new(
-            (chunk_x * chunk_width) as i32, 
-            (chunk_y * chunk_height) as i32, 
-            chunk_width as i32, 
-            chunk_height as i32
-        );
-        
+        let y = i as u32 / grid_w;
+        let x = i as u32 % grid_w;
+        let top_left = core::Point::new((x * chunk_w) as i32, (y * chunk_h) as i32);
+        let rect = Rect::new(top_left.x, top_left.y, chunk_w as i32, chunk_h as i32);
         match status {
-            ChunkStatus::Stable => {
-                let mut roi = Mat::roi(frame, rect).unwrap();
-                let mut dimmed = Mat::default();
-                core::multiply(&roi, &Scalar::all(0.7), &mut dimmed, 1.0, -1).unwrap();
-                dimmed.copy_to(&mut roi).unwrap();
-            },
+            ChunkStatus::Stable | ChunkStatus::Learning => {
+                let roi = Mat::roi(frame, rect).unwrap();
+                let mut dimmed_roi = Mat::default();
+                core::multiply(&roi, &Scalar::all(0.4), &mut dimmed_roi, 1.0, -1).unwrap();
+                dimmed_roi.copy_to(&mut Mat::roi(frame, rect).unwrap()).unwrap();
+            }
+            ChunkStatus::PredictableMotion => {
+                let color = Scalar::new(255.0, 0.0, 0.0, 0.0);
+                imgproc::rectangle(heatmap, rect, color, -1, imgproc::LINE_8, 0).unwrap();
+            }
             ChunkStatus::AnomalousEvent(details) => {
-                let intensity = ((details.luminance_score * 20.0).min(255.0)) as f64;
-                let heat_color = Scalar::new(0.0, intensity * 0.5, intensity, 0.0);
-                imgproc::rectangle(heat_overlay, rect, heat_color, -1, imgproc::LINE_8, 0).unwrap();
-            },
-            _ => {}
+                let score = details.luminance_score.clamp(0.0, 10.0);
+                let (r, g, b) = if score <= 5.0 {
+                    let ratio = score / 5.0;
+                    (0.0, 255.0 * ratio, 255.0 * (1.0 - ratio))
+                } else {
+                    let ratio = (score - 5.0) / 5.0;
+                    (255.0 * ratio, 255.0 * (1.0 - ratio), 0.0)
+                };
+                imgproc::rectangle(heatmap, rect, Scalar::new(b, g, r, 0.0), -1, imgproc::LINE_8, 0).unwrap();
+            }
         }
     }
 }
 
-fn draw_tracked_blobs(frame: &mut Mat, tracked_blobs: &[TrackedBlob], chunk_width: u32, chunk_height: u32) {
-    // O(n*m) where n = number of blobs, m = chunks per blob
+// Other helper functions remain the same...
+fn draw_tracked_blobs(frame: &mut Mat, tracked_blobs: &[TrackedBlob], chunk_w: u32, chunk_h: u32) {
     for blob in tracked_blobs {
         let color = state_to_color(&blob.state);
-        
-        // Fill the blob area with a semi-transparent colored overlay
-        for chunk_coord in &blob.latest_blob.chunk_coords {
-            let chunk_rect = Rect::new(
-                (chunk_coord.x * chunk_width) as i32,
-                (chunk_coord.y * chunk_height) as i32,
-                chunk_width as i32,
-                chunk_height as i32
-            );
-            let colored_overlay = Mat::new_size_with_default(
-                core::Size::new(chunk_width as i32, chunk_height as i32),
-                core::CV_8UC3,
-                color
-            ).unwrap();
-            let mut roi = Mat::roi(frame, chunk_rect).unwrap();
-            let mut blended = Mat::default();
-            core::add_weighted(&roi, 0.6, &colored_overlay, 0.4, 0.0, &mut blended, -1).unwrap();
-            blended.copy_to(&mut roi).unwrap();
+        for point in &blob.latest_blob.chunk_coords {
+            let top_left = core::Point::new(point.x as i32 * chunk_w as i32, point.y as i32 * chunk_h as i32);
+            let rect = Rect::new(top_left.x, top_left.y, chunk_w as i32, chunk_h as i32);
+            let roi = Mat::roi(frame, rect).unwrap();
+            let mut colored_roi = Mat::default();
+            let color_mat = Mat::new_size_with_default(roi.size().unwrap(), roi.typ(), color).unwrap();
+            core::add_weighted(&roi, 0.5, &color_mat, 0.5, 0.0, &mut colored_roi, -1).unwrap();
+            colored_roi.copy_to(&mut Mat::roi(frame, rect).unwrap()).unwrap();
         }
-        
-        // Draw bounding box
-        let (min_point, max_point) = &blob.latest_blob.bounding_box;
-        let rect = Rect::new(
-            (min_point.x * chunk_width) as i32,
-            (min_point.y * chunk_height) as i32,
-            ((max_point.x - min_point.x + 1) * chunk_width) as i32,
-            ((max_point.y - min_point.y + 1) * chunk_height) as i32
-        );
+        let (top_left_p, bottom_right_p) = blob.latest_blob.bounding_box;
+        let top_left = core::Point::new(top_left_p.x as i32 * chunk_w as i32, top_left_p.y as i32 * chunk_h as i32);
+        let bottom_right = core::Point::new((bottom_right_p.x + 1) as i32 * chunk_w as i32, (bottom_right_p.y + 1) as i32 * chunk_h as i32);
+        let rect = Rect::new(top_left.x, top_left.y, bottom_right.x - top_left.x, bottom_right.y - top_left.y);
         imgproc::rectangle(frame, rect, color, 2, imgproc::LINE_8, 0).unwrap();
-        
-        // Draw detailed label
         let label = format!("ID: {} | S: {:?} | A: {}", blob.id, blob.state, blob.age);
         let text_pos = core::Point::new(rect.x, rect.y - 10);
         imgproc::put_text(frame, &label, text_pos, imgproc::FONT_HERSHEY_SIMPLEX, 0.5, color, 2, imgproc::LINE_AA, false).unwrap();
@@ -239,9 +192,9 @@ fn draw_tracked_blobs(frame: &mut Mat, tracked_blobs: &[TrackedBlob], chunk_widt
 
 fn state_to_color(state: &TrackedState) -> Scalar {
     match state {
-        TrackedState::New => Scalar::new(0.0, 255.0, 255.0, 0.0),      // Cyan
-        TrackedState::Tracking => Scalar::new(255.0, 100.0, 0.0, 0.0),  // Orange
-        TrackedState::Lost => Scalar::new(128.0, 128.0, 128.0, 0.0),    // Gray
-        TrackedState::Anomalous => Scalar::new(0.0, 0.0, 255.0, 0.0),   // Red
+        TrackedState::New => Scalar::new(0.0, 255.0, 255.0, 0.0),
+        TrackedState::Tracking => Scalar::new(255.0, 100.0, 0.0, 0.0),
+        TrackedState::Lost => Scalar::new(128.0, 128.0, 128.0, 0.0),
+        TrackedState::Anomalous => Scalar::new(0.0, 0.0, 255.0, 0.0),
     }
 }
