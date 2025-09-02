@@ -27,7 +27,14 @@ use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::pixel::pixel::Pixel;
 use crate::core_modules::smart_chunk::{ChunkStatus, SmartChunk};
 use std::sync::Arc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task;
+
+/// Message type for SmartChunk actors
+enum ChunkMessage {
+    Update(Chunk, oneshot::Sender<ChunkStatus>),
+    Shutdown,
+}
 
 /// Manages the entire grid of `SmartChunk`s and orchestrates the temporal analysis layer.
 pub struct GridManager {
@@ -41,12 +48,8 @@ pub struct GridManager {
     chunk_width: u32,
     /// The height of a single chunk in pixels.
     chunk_height: u32,
-    /// A flattened vector holding all the stateful `SmartChunk` analyzers, one for each grid position.
-    smart_chunks: Vec<SmartChunk>,
-    /// Pre-allocated pixel buffer to reduce allocations
-    pixel_buffer: Vec<Vec<Pixel>>,
-    /// Pre-calculated byte indices for faster pixel extraction
-    byte_indices: Vec<Vec<usize>>,
+    /// Channels to communicate with SmartChunk actors
+    chunk_actors: Vec<mpsc::Sender<ChunkMessage>>,
 }
 
 impl GridManager {
@@ -55,40 +58,30 @@ impl GridManager {
         let grid_width = image_width / chunk_width;
         let grid_height = image_height / chunk_height;
         let num_chunks = (grid_width * grid_height) as usize;
-        let mut smart_chunks = Vec::with_capacity(num_chunks);
+        let mut chunk_actors = Vec::with_capacity(num_chunks);
 
-        // Initialize smart chunks
+        // Spawn an actor task for each SmartChunk
         for i in 0..num_chunks {
             let y = i as u32 / grid_width;
             let x = i as u32 % grid_width;
-            smart_chunks.push(SmartChunk::new(x, y));
-        }
-        
-        // Pre-allocate pixel buffers for all chunks
-        let chunk_pixels = (chunk_width * chunk_height) as usize;
-        let mut pixel_buffer = Vec::with_capacity(num_chunks);
-        for _ in 0..num_chunks {
-            pixel_buffer.push(Vec::with_capacity(chunk_pixels));
-        }
-        
-        // Pre-calculate byte indices for faster pixel extraction
-        let mut byte_indices = Vec::with_capacity(num_chunks);
-        for chunk_index in 0..num_chunks {
-            let chunk_y = chunk_index as u32 / grid_width;
-            let chunk_x = chunk_index as u32 % grid_width;
-            let start_pixel_x = chunk_x * chunk_width;
-            let start_pixel_y = chunk_y * chunk_height;
+            let (tx, mut rx) = mpsc::channel::<ChunkMessage>(10);
             
-            let mut chunk_byte_indices = Vec::with_capacity(chunk_pixels);
-            for i in 0..chunk_pixels {
-                let y_offset = i as u32 / chunk_width;
-                let x_offset = i as u32 % chunk_width;
-                let pixel_y = start_pixel_y + y_offset;
-                let pixel_x = start_pixel_x + x_offset;
-                let byte_index = ((pixel_y * image_width) + pixel_x) * 4;
-                chunk_byte_indices.push(byte_index as usize);
-            }
-            byte_indices.push(chunk_byte_indices);
+            // Spawn actor task that owns its SmartChunk
+            tokio::spawn(async move {
+                let mut smart_chunk = SmartChunk::new(x, y);
+                
+                while let Some(msg) = rx.recv().await {
+                    match msg {
+                        ChunkMessage::Update(chunk_data, reply) => {
+                            smart_chunk.update(&chunk_data);
+                            let _ = reply.send(smart_chunk.status.clone());
+                        }
+                        ChunkMessage::Shutdown => break,
+                    }
+                }
+            });
+            
+            chunk_actors.push(tx);
         }
 
         Self {
@@ -97,93 +90,84 @@ impl GridManager {
             grid_height,
             chunk_width,
             chunk_height,
-            smart_chunks,
-            pixel_buffer,
-            byte_indices,
+            chunk_actors,
         }
     }
 
-    /// The main entry point for the vision system with adaptive parallelization.
+    /// The main entry point for the vision system with actor-based parallelism.
     /// Takes a raw RGBA image buffer, processes it, and returns a map of chunk statuses.
     pub async fn process_frame(&mut self, frame_buffer: &[u8]) -> Vec<ChunkStatus> {
+        let num_chunks = self.chunk_actors.len();
         let frame_arc = Arc::new(frame_buffer.to_vec());
-        let num_chunks = self.smart_chunks.len();
-        let chunk_pixels = (self.chunk_width * self.chunk_height) as usize;
         
-        // Determine optimal batch size based on CPU cores
-        let num_cpus = num_cpus::get();
-        let batch_size = (num_chunks + num_cpus - 1) / num_cpus;
+        // Spawn parallel tasks to extract pixels and send to actors
+        let mut update_tasks = Vec::with_capacity(num_chunks);
         
-        // Process chunks in concurrent batches
-        let mut chunk_futures = Vec::new();
-        
-        for batch_start in (0..num_chunks).step_by(batch_size) {
-            let batch_end = (batch_start + batch_size).min(num_chunks);
+        for chunk_index in 0..num_chunks {
+            let chunk_y = chunk_index as u32 / self.grid_width;
+            let chunk_x = chunk_index as u32 % self.grid_width;
+            let start_pixel_x = chunk_x * self.chunk_width;
+            let start_pixel_y = chunk_y * self.chunk_height;
+            
             let frame_clone = Arc::clone(&frame_arc);
-            let byte_indices_batch = self.byte_indices[batch_start..batch_end].to_vec();
             let chunk_width = self.chunk_width;
             let chunk_height = self.chunk_height;
+            let image_width = self.image_width;
+            let tx = self.chunk_actors[chunk_index].clone();
             
-            // Spawn async task for each batch
-            let batch_future = task::spawn(async move {
-                let mut batch_chunks = Vec::with_capacity(batch_end - batch_start);
+            // Spawn task to extract pixels and send to actor
+            let task = tokio::spawn(async move {
+                // Extract pixels for this chunk
+                let mut chunk_pixels = Vec::with_capacity((chunk_width * chunk_height) as usize);
                 
-                for indices in byte_indices_batch {
-                    // Extract pixels using pre-calculated indices
-                    let mut chunk_pixels_data = Vec::with_capacity(chunk_pixels);
+                for i in 0..(chunk_width * chunk_height) {
+                    let y_offset = i / chunk_width;
+                    let x_offset = i % chunk_width;
+                    let pixel_y = start_pixel_y + y_offset;
+                    let pixel_x = start_pixel_x + x_offset;
+                    let byte_index = ((pixel_y * image_width) + pixel_x) * 4;
                     
-                    // Use unsafe for faster memory access (validated indices)
-                    unsafe {
-                        for &byte_idx in &indices {
-                            // Direct memory access without bounds checking
-                            let r = *frame_clone.get_unchecked(byte_idx);
-                            let g = *frame_clone.get_unchecked(byte_idx + 1);
-                            let b = *frame_clone.get_unchecked(byte_idx + 2);
-                            let a = *frame_clone.get_unchecked(byte_idx + 3);
-                            
-                            chunk_pixels_data.push(Pixel {
-                                red: r,
-                                green: g,
-                                blue: b,
-                                alpha: a,
-                            });
-                        }
-                    }
-                    
-                    let chunk_data = Chunk::new(chunk_width, chunk_height, chunk_pixels_data);
-                    batch_chunks.push(chunk_data);
+                    let pixel_bytes = &frame_clone[byte_index as usize..(byte_index + 4) as usize];
+                    chunk_pixels.push(Pixel::from(pixel_bytes));
                 }
                 
-                batch_chunks
+                let chunk_data = Chunk::new(chunk_width, chunk_height, chunk_pixels);
+                
+                // Send to actor and wait for response
+                let (reply_tx, reply_rx) = oneshot::channel();
+                tx.send(ChunkMessage::Update(chunk_data, reply_tx)).await.ok();
+                reply_rx.await.ok()
             });
             
-            chunk_futures.push((batch_start, batch_future));
+            update_tasks.push(task);
         }
         
-        // Await all batch processing
-        let mut all_chunks: Vec<Option<Chunk>> = Vec::with_capacity(num_chunks);
-        for _ in 0..num_chunks {
-            all_chunks.push(None);
-        }
-        for (batch_start, future) in chunk_futures {
-            if let Ok(batch_chunks) = future.await {
-                for (i, chunk) in batch_chunks.into_iter().enumerate() {
-                    all_chunks[batch_start + i] = Some(chunk);
-                }
+        // Await all updates and collect statuses
+        let mut status_map = Vec::with_capacity(num_chunks);
+        for task in update_tasks {
+            if let Ok(Some(status)) = task.await {
+                status_map.push(status);
+            } else {
+                status_map.push(ChunkStatus::Learning);
             }
         }
         
-        // Update smart chunks sequentially (they maintain state)
-        for (i, chunk_opt) in all_chunks.into_iter().enumerate() {
-            if let Some(chunk_data) = chunk_opt {
-                self.smart_chunks[i].update(&chunk_data);
-            }
+        status_map
+    }
+    
+    /// Shutdown all actor tasks cleanly
+    pub async fn shutdown(&self) {
+        for tx in &self.chunk_actors {
+            let _ = tx.send(ChunkMessage::Shutdown).await;
         }
-        
-        // Collect statuses
-        self.smart_chunks
-            .iter()
-            .map(|sc| sc.status.clone())
-            .collect()
+    }
+}
+
+impl Drop for GridManager {
+    fn drop(&mut self) {
+        // Best effort shutdown on drop
+        for tx in &self.chunk_actors {
+            let _ = tx.try_send(ChunkMessage::Shutdown);
+        }
     }
 }

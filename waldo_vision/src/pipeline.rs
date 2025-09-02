@@ -106,7 +106,7 @@ impl VisionPipeline {
             &status_map,
             self.config.image_width / self.config.chunk_width,
             self.config.image_height / self.config.chunk_height,
-        ).await;
+        );
         let filtered_blobs = self.filter_blobs(raw_blobs);
         let (newly_started, newly_completed) = self.scene_manager.update(filtered_blobs, &self.config);
 

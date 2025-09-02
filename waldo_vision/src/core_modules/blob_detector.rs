@@ -28,246 +28,149 @@
 
 use crate::core_modules::smart_blob::{Point, SmartBlob};
 use crate::core_modules::smart_chunk::{AnomalyDetails, ChunkStatus};
-use std::sync::Arc;
-use tokio::task;
 
 pub mod blob_detector {
-    use super::*;
-    
-    // Pre-computed neighbor offsets for peak finding - eliminates inner loops
-    const NEIGHBOR_OFFSETS: [(i32, i32); 8] = [
-        (-1, -1), (-1, 0), (-1, 1),
-        (0, -1),           (0, 1),
-        (1, -1),  (1, 0),  (1, 1)
-    ];
-    
-    // Pre-computed neighbor offsets for region growing (4-connectivity)
-    const GROW_OFFSETS: [(i32, i32); 4] = [(0, 1), (0, -1), (1, 0), (-1, 0)];
-    
-    // Threshold for when to use parallel processing
-    const PARALLEL_THRESHOLD: usize = 10;
+    use super::*; // Make structs from parent module available.
 
     /// The main function of the spatial analysis layer.
     /// Takes a status map and identifies all coherent blobs of anomalous activity.
-    pub async fn find_blobs(
+    pub fn find_blobs(
         status_map: &[ChunkStatus],
         grid_width: u32,
         grid_height: u32,
     ) -> Vec<SmartBlob> {
-        // --- 1. Optimized Heatmap Generation O(n) ---
-        let total_size = (grid_width * grid_height) as usize;
-        let mut heatmap_flat = vec![0.0; total_size];
-        
-        // Direct indexing without division/modulo in the loop
+        // --- 1. Heatmap Generation ---
+        // Convert the flat Vec<ChunkStatus> into a 2D grid of f64 heat values.
+        // The heat is determined by the luminance_score of an AnomalousEvent.
+        // Non-anomalous chunks are given a heat of 0.0.
+        let mut heatmap = vec![vec![0.0; grid_width as usize]; grid_height as usize];
         for (i, status) in status_map.iter().enumerate() {
             if let ChunkStatus::AnomalousEvent(details) = status {
-                heatmap_flat[i] = details.luminance_score;
+                let y = i / grid_width as usize;
+                let x = i % grid_width as usize;
+                heatmap[y][x] = details.luminance_score;
             }
         }
 
-        // --- 2. Optimized Peak Finding O(n) ---
-        let peaks = find_peaks_optimized(&heatmap_flat, grid_width, grid_height);
+        // --- 2. Peak Finding ---
+        // Find all local maxima in the heatmap to use as seeds for our blobs.
+        // A chunk is a peak if its heat is greater than all 8 of its neighbors.
+        let mut peaks: Vec<Point> = Vec::new();
+        for y in 0..grid_height as usize {
+            for x in 0..grid_width as usize {
+                let heat = heatmap[y][x];
+                // A chunk must have some heat to be a peak.
+                if heat == 0.0 {
+                    continue;
+                }
 
-        // --- 3. Adaptive Region Growing ---
-        // Use parallel processing only when we have many peaks
-        if peaks.len() > PARALLEL_THRESHOLD {
-            grow_blobs_parallel(peaks, heatmap_flat, status_map, grid_width, grid_height).await
-        } else {
-            grow_blobs_sequential(peaks, heatmap_flat, status_map, grid_width, grid_height)
-        }
-    }
+                let mut is_peak = true;
+                // Check all 8 neighbors.
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        // Skip the center point itself.
+                        if dy == 0 && dx == 0 {
+                            continue;
+                        }
 
-    /// Optimized peak finding with single pass O(n) and early termination
-    fn find_peaks_optimized(
-        heatmap: &[f64],
-        grid_width: u32,
-        grid_height: u32,
-    ) -> Vec<Point> {
-        let width = grid_width as i32;
-        let height = grid_height as i32;
-        
-        // Pre-allocate with estimated capacity
-        let mut peaks = Vec::with_capacity((grid_width * grid_height / 100) as usize);
-        
-        // Single pass through flattened heatmap - O(n)
-        for (idx, &heat) in heatmap.iter().enumerate() {
-            // Early termination for zero heat
-            if heat == 0.0 {
-                continue;
-            }
-            
-            let y = (idx as i32) / width;
-            let x = (idx as i32) % width;
-            
-            // Check if it's a local maximum using pre-computed offsets
-            let mut is_peak = true;
-            for &(dx, dy) in &NEIGHBOR_OFFSETS {
-                let nx = x + dx;
-                let ny = y + dy;
-                
-                // Boundary check
-                if nx >= 0 && nx < width && ny >= 0 && ny < height {
-                    let neighbor_idx = (ny * width + nx) as usize;
-                    if heatmap[neighbor_idx] > heat {
-                        is_peak = false;
-                        break; // Early termination
+                        let ny = y as i32 + dy;
+                        let nx = x as i32 + dx;
+
+                        // Check if the neighbor is within the grid boundaries.
+                        if ny >= 0 && ny < grid_height as i32 && nx >= 0 && nx < grid_width as i32 {
+                            if heatmap[ny as usize][nx as usize] > heat {
+                                is_peak = false;
+                                break;
+                            }
+                        }
+                    }
+                    if !is_peak {
+                        break;
                     }
                 }
-            }
-            
-            if is_peak {
-                peaks.push(Point {
-                    x: x as u32,
-                    y: y as u32,
-                });
+
+                if is_peak {
+                    peaks.push(Point {
+                        x: x as u32,
+                        y: y as u32,
+                    });
+                }
             }
         }
-        
-        peaks
-    }
 
-    /// Sequential blob growing for small numbers of blobs
-    fn grow_blobs_sequential(
-        peaks: Vec<Point>,
-        heatmap_flat: Vec<f64>,
-        status_map: &[ChunkStatus],
-        grid_width: u32,
-        grid_height: u32,
-    ) -> Vec<SmartBlob> {
-        let total_size = (grid_width * grid_height) as usize;
-        let mut visited = vec![false; total_size];
-        let mut blobs = Vec::new();
+        // --- 3. Region Growing & Blob Creation ---
+        // For each peak, grow a region and create a blob.
+        // A `visited` grid is crucial to ensure we don't process the same chunk twice.
+        let mut visited = vec![vec![false; grid_width as usize]; grid_height as usize];
+        let mut blobs: Vec<SmartBlob> = Vec::new();
         let mut blob_id_counter = 0;
 
         for peak in peaks {
-            let peak_idx = (peak.y * grid_width + peak.x) as usize;
-            if visited[peak_idx] {
+            if visited[peak.y as usize][peak.x as usize] {
                 continue;
             }
 
-            let blob = grow_blob_from_peak(
+            // Grow a new blob starting from this unvisited peak.
+            let new_blob = grow_blob_from_peak(
                 peak,
-                &heatmap_flat,
+                &heatmap,
                 &mut visited,
                 blob_id_counter,
                 status_map,
                 grid_width,
-                grid_height,
             );
-            blobs.push(blob);
+            blobs.push(new_blob);
             blob_id_counter += 1;
         }
 
         blobs
     }
 
-    /// Parallel blob growing for large numbers of blobs
-    async fn grow_blobs_parallel(
-        peaks: Vec<Point>,
-        heatmap_flat: Vec<f64>,
-        status_map: &[ChunkStatus],
-        grid_width: u32,
-        grid_height: u32,
-    ) -> Vec<SmartBlob> {
-        let total_size = (grid_width * grid_height) as usize;
-        let mut visited = vec![false; total_size];
-        let mut blob_futures = Vec::new();
-        let mut blob_id_counter = 0;
-        
-        // Convert to Arc for sharing across tasks
-        let heatmap_arc = Arc::new(heatmap_flat);
-        let status_map_arc = Arc::new(status_map.to_vec());
-
-        for peak in peaks {
-            let peak_idx = (peak.y * grid_width + peak.x) as usize;
-            if visited[peak_idx] {
-                continue;
-            }
-
-            // Clone Arcs for the async task
-            let heatmap_clone = Arc::clone(&heatmap_arc);
-            let status_map_clone = Arc::clone(&status_map_arc);
-            let mut visited_local = visited.clone();
-            
-            // Spawn concurrent blob growing tasks
-            let blob_future = task::spawn(async move {
-                grow_blob_from_peak(
-                    peak,
-                    &heatmap_clone,
-                    &mut visited_local,
-                    blob_id_counter,
-                    &status_map_clone,
-                    grid_width,
-                    grid_height,
-                )
-            });
-            
-            blob_futures.push(blob_future);
-            
-            // Mark visited in main thread too
-            mark_blob_visited(&mut visited, peak, &heatmap_arc, grid_width, grid_height);
-            blob_id_counter += 1;
-        }
-
-        // Await all blob growing tasks
-        let mut blobs = Vec::new();
-        for future in blob_futures {
-            if let Ok(blob) = future.await {
-                blobs.push(blob);
-            }
-        }
-
-        blobs
-    }
 
     /// Defines the minimum "heat" a chunk must have to be included in a growing blob.
     const REGION_GROW_THRESHOLD: f64 = 1.0;
 
-    /// Optimized blob growing with pre-allocated buffers - O(blob_size)
+    /// Performs a breadth-first search (BFS) to find all connected chunks for a blob.
     fn grow_blob_from_peak(
         peak: Point,
-        heatmap: &[f64],
-        visited: &mut [bool],
+        heatmap: &[Vec<f64>],
+        visited: &mut [Vec<bool>],
         blob_id: u64,
         status_map: &[ChunkStatus],
         grid_width: u32,
-        grid_height: u32,
     ) -> SmartBlob {
-        let width = grid_width as i32;
-        let height = grid_height as i32;
-        
-        // Pre-allocate with estimated capacity
-        let mut blob_chunks = Vec::with_capacity(50);
-        let mut queue = Vec::with_capacity(50);
-        
-        let peak_idx = (peak.y * grid_width + peak.x) as usize;
-        queue.push(peak);
-        visited[peak_idx] = true;
+        let mut blob_chunks: Vec<Point> = Vec::new();
+        let mut queue: Vec<Point> = vec![peak];
+        visited[peak.y as usize][peak.x as usize] = true;
 
-        // Optimized BFS with pre-computed offsets - O(blob_size)
+        let grid_height = heatmap.len() as i32;
+        let grid_width_i32 = heatmap[0].len() as i32;
+
         while let Some(current) = queue.pop() {
             blob_chunks.push(current);
 
-            // Use pre-computed offsets for neighbors
-            for &(dx, dy) in &GROW_OFFSETS {
+            // Check all 4 direct neighbors (not diagonals).
+            for (dx, dy) in &[(0, 1), (0, -1), (1, 0), (-1, 0)] {
                 let nx = current.x as i32 + dx;
                 let ny = current.y as i32 + dy;
 
-                if nx >= 0 && nx < width && ny >= 0 && ny < height {
-                    let neighbor_idx = (ny * width + nx) as usize;
-                    
-                    if !visited[neighbor_idx] && heatmap[neighbor_idx] >= REGION_GROW_THRESHOLD {
-                        visited[neighbor_idx] = true;
+                if nx >= 0 && nx < grid_width_i32 && ny >= 0 && ny < grid_height {
+                    let nx_u = nx as usize;
+                    let ny_u = ny as usize;
+
+                    if !visited[ny_u][nx_u] && heatmap[ny_u][nx_u] >= REGION_GROW_THRESHOLD {
+                        visited[ny_u][nx_u] = true;
                         queue.push(Point {
-                            x: nx as u32,
-                            y: ny as u32,
+                            x: nx_u as u32,
+                            y: ny_u as u32,
                         });
                     }
                 }
             }
         }
 
-        // --- Optimized Data Aggregation O(blob_size) ---
+        // --- Data Aggregation ---
+        // Now that we have all the chunks, calculate the final blob properties.
         let mut min_x = u32::MAX;
         let mut min_y = u32::MAX;
         let mut max_x = 0;
@@ -309,42 +212,6 @@ pub mod blob_detector {
                 hue_score: total_hue_score / num_chunks as f64,
             },
             center_of_mass: (center_x / total_heat, center_y / total_heat),
-        }
-    }
-    
-    /// Helper to mark blob regions as visited - O(blob_size)
-    fn mark_blob_visited(
-        visited: &mut [bool],
-        start: Point,
-        heatmap: &[f64],
-        grid_width: u32,
-        grid_height: u32,
-    ) {
-        let width = grid_width as i32;
-        let height = grid_height as i32;
-        let mut stack = vec![start];
-        
-        while let Some(current) = stack.pop() {
-            let idx = (current.y * grid_width + current.x) as usize;
-            if visited[idx] {
-                continue;
-            }
-            visited[idx] = true;
-            
-            for &(dx, dy) in &GROW_OFFSETS {
-                let nx = current.x as i32 + dx;
-                let ny = current.y as i32 + dy;
-                
-                if nx >= 0 && nx < width && ny >= 0 && ny < height {
-                    let neighbor_idx = (ny * width + nx) as usize;
-                    if !visited[neighbor_idx] && heatmap[neighbor_idx] >= REGION_GROW_THRESHOLD {
-                        stack.push(Point {
-                            x: nx as u32,
-                            y: ny as u32,
-                        });
-                    }
-                }
-            }
         }
     }
 }
