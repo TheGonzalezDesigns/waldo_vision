@@ -51,63 +51,68 @@ async fn main() -> opencv::Result<()> {
         disturbance_confirmation_frames: 5,
     });
     
-    // Create a single shared pipeline that maintains state
+    // Create optimized single pipeline for microsecond performance
     let pipeline = Arc::new(Mutex::new(VisionPipeline::new((*config).clone())));
 
-    println!("Processing frames with stateful pipeline and parallel visualization...");
+    println!("Processing frames with microsecond-optimized pipeline...");
     let total_frames = frames.len();
     let mut processed_frames = Vec::with_capacity(total_frames);
     
-    // Process frames sequentially through the pipeline to maintain state
-    // but parallelize the visualization work
+    // Process frames sequentially for websocket-like real-time usage
     for (i, frame) in frames.into_iter().enumerate() {
+        let frame_start = std::time::Instant::now();
+        
         // Convert frame to RGBA buffer
+        let conversion_start = std::time::Instant::now();
         let mut rgba_frame = Mat::default();
         imgproc::cvt_color(&frame, &mut rgba_frame, imgproc::COLOR_BGR2RGBA, 0).unwrap();
         let frame_buffer: Vec<u8> = rgba_frame.data_bytes().unwrap().to_vec();
+        let conversion_time = conversion_start.elapsed();
         
         // Process through pipeline (maintains state)
+        let pipeline_start = std::time::Instant::now();
         let analysis = {
             let mut pipeline = pipeline.lock().await;
             pipeline.process_frame(&frame_buffer).await
         };
+        let pipeline_time = pipeline_start.elapsed();
         
-        // Visualization can be done without the pipeline lock
-        let config_clone = Arc::clone(&config);
-        let visualization_task = tokio::spawn(async move {
-            let mut output_frame = frame.clone();
-            let mut heatmap_overlay = Mat::new_size_with_default(
-                frame.size().unwrap(), 
-                core::CV_8UC3, 
-                Scalar::all(0.0)
-            ).unwrap();
-            
-            apply_dimming_and_heat(
-                &mut output_frame, 
-                &mut heatmap_overlay, 
-                &analysis.status_map, 
-                config_clone.image_width, 
-                config_clone.chunk_width, 
-                config_clone.chunk_height
-            );
-            draw_tracked_blobs(
-                &mut output_frame, 
-                &analysis.tracked_blobs, 
-                config_clone.chunk_width, 
-                config_clone.chunk_height
-            );
-            draw_header(&mut output_frame, i, &analysis);
+        // Visualization processing
+        let viz_start = std::time::Instant::now();
+        let mut output_frame = frame.clone();
+        let mut heatmap_overlay = Mat::new_size_with_default(
+            frame.size().unwrap(), 
+            core::CV_8UC3, 
+            Scalar::all(0.0)
+        ).unwrap();
+        
+        apply_dimming_and_heat(
+            &mut output_frame, 
+            &mut heatmap_overlay, 
+            &analysis.status_map, 
+            config.image_width, 
+            config.chunk_width, 
+            config.chunk_height
+        );
+        draw_tracked_blobs(
+            &mut output_frame, 
+            &analysis.tracked_blobs, 
+            config.chunk_width, 
+            config.chunk_height
+        );
+        draw_header(&mut output_frame, i, &analysis);
 
-            let mut final_frame = Mat::default();
-            core::add_weighted(&output_frame, 1.0, &heatmap_overlay, 0.8, 0.0, &mut final_frame, -1).unwrap();
-            
-            (i, final_frame)
-        });
+        let mut final_frame = Mat::default();
+        core::add_weighted(&output_frame, 1.0, &heatmap_overlay, 0.8, 0.0, &mut final_frame, -1).unwrap();
+        let viz_time = viz_start.elapsed();
         
-        processed_frames.push(visualization_task.await.unwrap());
+        processed_frames.push((i, final_frame));
         
+        let total_time = frame_start.elapsed();
         if i % 100 == 0 {
-            println!("Processed frame {} of {}", i, total_frames);
+            println!("Frame {}: Total={}μs | Conversion={}μs | Pipeline={}μs | Viz={}μs", 
+                i, total_time.as_micros(), conversion_time.as_micros(), 
+                pipeline_time.as_micros(), viz_time.as_micros());
         }
     }
 
