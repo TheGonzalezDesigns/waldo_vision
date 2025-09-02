@@ -7,7 +7,7 @@
 use crate::core_modules::smart_blob::SmartBlob;
 use crate::core_modules::tracker::{TrackedBlob, Tracker, TrackedState};
 use crate::pipeline::PipelineConfig;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Represents the complete, historical record of a single tracked object's journey.
 #[derive(Debug, Clone)]
@@ -69,11 +69,18 @@ impl SceneManager {
 
         let mut current_tracked_ids = HashSet::new();
         let mut newly_started_moments = Vec::new();
+        
+        // Build HashMap for O(1) moment lookups
+        let mut moment_map: HashMap<u64, usize> = HashMap::new();
+        for (i, moment) in self.active_moments.iter().enumerate() {
+            moment_map.insert(moment.id, i);
+        }
 
         for tracked_blob in tracked_blobs {
             current_tracked_ids.insert(tracked_blob.id);
 
-            let moment = if let Some(m) = self.active_moments.iter_mut().find(|m| m.id == tracked_blob.id) {
+            let moment = if let Some(&moment_idx) = moment_map.get(&tracked_blob.id) {
+                let m = &mut self.active_moments[moment_idx];
                 m.update(tracked_blob, self.frame_count);
                 m
             } else {
