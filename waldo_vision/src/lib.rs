@@ -11,3 +11,4 @@
 
 pub mod core_modules;
 pub mod pipeline;
+pub mod parallel_pipeline;
