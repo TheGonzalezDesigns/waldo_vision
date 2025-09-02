@@ -74,6 +74,8 @@ pub struct VisionPipeline {
     scene_manager: SceneManager,
     config: PipelineConfig,
     blob_size_history: VecDeque<usize>,
+    blob_size_sum: usize,
+    blob_size_sum_sq: usize,
     significant_event_count: u64,
     scene_state: SceneState,
     frames_in_current_state: u32,
@@ -92,6 +94,8 @@ impl VisionPipeline {
             scene_manager: SceneManager::new(),
             config,
             blob_size_history: VecDeque::with_capacity(BLOB_SIZE_HISTORY_LENGTH),
+            blob_size_sum: 0,
+            blob_size_sum_sq: 0,
             significant_event_count: 0,
             scene_state: SceneState::Calibrating,
             frames_in_current_state: 0,
@@ -99,16 +103,35 @@ impl VisionPipeline {
     }
 
     pub async fn process_frame(&mut self, frame_buffer: &[u8]) -> FrameAnalysis {
+        let grid_start = std::time::Instant::now();
         let status_map = self.grid_manager.process_frame(frame_buffer).await;
+        let grid_time = grid_start.elapsed();
+        
+        let scene_start = std::time::Instant::now();
         self.analyze_scene_stability(&status_map);
+        let scene_time = scene_start.elapsed();
 
+        let blob_start = std::time::Instant::now();
         let raw_blobs = blob_detector::find_blobs(
             &status_map,
             self.config.image_width / self.config.chunk_width,
             self.config.image_height / self.config.chunk_height,
         );
+        let blob_time = blob_start.elapsed();
+        
+        let filter_start = std::time::Instant::now();
         let filtered_blobs = self.filter_blobs(raw_blobs);
+        let filter_time = filter_start.elapsed();
+
+        let tracking_start = std::time::Instant::now();
         let (newly_started, newly_completed) = self.scene_manager.update(filtered_blobs, &self.config);
+        let tracking_time = tracking_start.elapsed();
+        
+        if frame_buffer.len() > 0 && frame_buffer.len() % 1000000 == 0 {
+            println!("  Grid={}μs | Scene={}μs | Blob={}μs | Filter={}μs | Track={}μs", 
+                grid_time.as_micros(), scene_time.as_micros(), blob_time.as_micros(), 
+                filter_time.as_micros(), tracking_time.as_micros());
+        }
 
         let new_significant_moments: Vec<Moment> = newly_started.into_iter().filter(|m| m.is_significant).collect();
         let completed_significant_moments: Vec<Moment> = newly_completed.into_iter().filter(|m| m.is_significant).collect();
@@ -139,12 +162,12 @@ impl VisionPipeline {
 
     fn filter_blobs(&mut self, blobs: Vec<SmartBlob>) -> Vec<SmartBlob> {
         let (mean, std_dev) = {
-            if self.blob_size_history.is_empty() { (0.0, 0.0) } else {
-                let sum: usize = self.blob_size_history.iter().sum();
-                let mean = sum as f64 / self.blob_size_history.len() as f64;
-                let variance: f64 = self.blob_size_history.iter()
-                    .map(|value| (*value as f64 - mean).powi(2))
-                    .sum::<f64>() / self.blob_size_history.len() as f64;
+            if self.blob_size_history.is_empty() { 
+                (0.0, 0.0) 
+            } else {
+                let n = self.blob_size_history.len() as f64;
+                let mean = self.blob_size_sum as f64 / n;
+                let variance = (self.blob_size_sum_sq as f64 / n) - (mean * mean);
                 (mean, variance.sqrt())
             }
         };
@@ -166,10 +189,17 @@ impl VisionPipeline {
             .collect();
 
         for blob in &filtered_blobs {
+            let size = blob.size_in_chunks;
+            
             if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH {
-                self.blob_size_history.pop_front();
+                let old_value = self.blob_size_history.pop_front().unwrap();
+                self.blob_size_sum -= old_value;
+                self.blob_size_sum_sq -= old_value * old_value;
             }
-            self.blob_size_history.push_back(blob.size_in_chunks);
+            
+            self.blob_size_history.push_back(size);
+            self.blob_size_sum += size;
+            self.blob_size_sum_sq += size * size;
         }
         filtered_blobs
     }
