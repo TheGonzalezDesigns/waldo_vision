@@ -1,0 +1,10 @@
+{
+    "mcpServers": {
+        "wide-search": {
+            "command": "wide-search-mcp"
+        },
+        "clipboard": {
+            "command": "/home/ubuntu/mcps/clipboard/target/release/clipboard-mcp"
+        }
+    }
+}
