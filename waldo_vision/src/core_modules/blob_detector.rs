@@ -39,85 +39,73 @@ pub mod blob_detector {
         grid_width: u32,
         grid_height: u32,
     ) -> Vec<SmartBlob> {
-        // --- 1. Heatmap Generation ---
-        // Convert the flat Vec<ChunkStatus> into a 2D grid of f64 heat values.
-        // The heat is determined by the luminance_score of an AnomalousEvent.
-        // Non-anomalous chunks are given a heat of 0.0.
-        let mut heatmap = vec![vec![0.0; grid_width as usize]; grid_height as usize];
+        // --- 1. Optimized Flat Heatmap Generation ---
+        // Use flat array for better cache locality
+        let total_chunks = (grid_width * grid_height) as usize;
+        let mut heatmap = vec![0.0; total_chunks];
         for (i, status) in status_map.iter().enumerate() {
             if let ChunkStatus::AnomalousEvent(details) = status {
-                let y = i / grid_width as usize;
-                let x = i % grid_width as usize;
-                heatmap[y][x] = details.luminance_score;
+                heatmap[i] = details.luminance_score;
             }
         }
 
-        // --- 2. Peak Finding ---
-        // Find all local maxima in the heatmap to use as seeds for our blobs.
-        // A chunk is a peak if its heat is greater than all 8 of its neighbors.
+        // --- 2. Optimized Peak Finding ---
         let mut peaks: Vec<Point> = Vec::new();
-        for y in 0..grid_height as usize {
-            for x in 0..grid_width as usize {
-                let heat = heatmap[y][x];
-                // A chunk must have some heat to be a peak.
-                if heat == 0.0 {
-                    continue;
-                }
-
-                let mut is_peak = true;
-                // Check all 8 neighbors.
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
-                        // Skip the center point itself.
-                        if dy == 0 && dx == 0 {
-                            continue;
-                        }
-
-                        let ny = y as i32 + dy;
-                        let nx = x as i32 + dx;
-
-                        // Check if the neighbor is within the grid boundaries.
-                        if ny >= 0 && ny < grid_height as i32 && nx >= 0 && nx < grid_width as i32 {
-                            if heatmap[ny as usize][nx as usize] > heat {
-                                is_peak = false;
-                                break;
-                            }
-                        }
-                    }
-                    if !is_peak {
+        const NEIGHBORS: [(i32, i32); 8] = [
+            (-1, -1), (-1, 0), (-1, 1),
+            (0, -1),           (0, 1),
+            (1, -1),  (1, 0),  (1, 1)
+        ];
+        
+        for idx in 0..total_chunks {
+            let heat = heatmap[idx];
+            if heat == 0.0 { continue; }
+            
+            let y = (idx as u32) / grid_width;
+            let x = (idx as u32) % grid_width;
+            
+            let mut is_peak = true;
+            for &(dx, dy) in &NEIGHBORS {
+                let nx = x as i32 + dx;
+                let ny = y as i32 + dy;
+                
+                if nx >= 0 && nx < grid_width as i32 && ny >= 0 && ny < grid_height as i32 {
+                    let neighbor_idx = (ny as u32 * grid_width + nx as u32) as usize;
+                    if heatmap[neighbor_idx] > heat {
+                        is_peak = false;
                         break;
                     }
                 }
-
-                if is_peak {
-                    peaks.push(Point {
-                        x: x as u32,
-                        y: y as u32,
-                    });
-                }
+            }
+            
+            if is_peak {
+                peaks.push(Point { x, y });
             }
         }
 
-        // --- 3. Region Growing & Blob Creation ---
-        // For each peak, grow a region and create a blob.
-        // A `visited` grid is crucial to ensure we don't process the same chunk twice.
-        let mut visited = vec![vec![false; grid_width as usize]; grid_height as usize];
+        // --- 3. Priority-based Region Growing ---
+        let mut visited = vec![false; total_chunks];
         let mut blobs: Vec<SmartBlob> = Vec::new();
         let mut blob_id_counter = 0;
+        
+        // Sort peaks by heat value (process hottest first)
+        let mut peak_priority: Vec<_> = peaks.iter()
+            .map(|p| (p, heatmap[(p.y * grid_width + p.x) as usize]))
+            .collect();
+        peak_priority.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-        for peak in peaks {
-            if visited[peak.y as usize][peak.x as usize] {
-                continue;
-            }
+        for (peak, _) in peak_priority {
+            let peak_idx = (peak.y * grid_width + peak.x) as usize;
+            if visited[peak_idx] { continue; }
 
-            // Grow a new blob starting from this unvisited peak.
             let new_blob = grow_blob_from_peak(
-                peak,
+                *peak,
                 &heatmap,
                 &mut visited,
                 blob_id_counter,
                 status_map,
                 grid_width,
+                grid_height,
             );
             blobs.push(new_blob);
             blob_id_counter += 1;
@@ -133,36 +121,63 @@ pub mod blob_detector {
     /// Performs a breadth-first search (BFS) to find all connected chunks for a blob.
     fn grow_blob_from_peak(
         peak: Point,
-        heatmap: &[Vec<f64>],
-        visited: &mut [Vec<bool>],
+        heatmap: &[f64],
+        visited: &mut [bool],
         blob_id: u64,
         status_map: &[ChunkStatus],
         grid_width: u32,
+        grid_height: u32,
     ) -> SmartBlob {
+        use std::collections::BinaryHeap;
+        use std::cmp::Ordering;
+        
+        #[derive(Clone, Copy)]
+        struct PriorityNode {
+            point: Point,
+            heat: f64,
+        }
+        
+        impl PartialEq for PriorityNode {
+            fn eq(&self, other: &Self) -> bool {
+                self.heat == other.heat
+            }
+        }
+        impl Eq for PriorityNode {}
+        impl Ord for PriorityNode {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.heat.partial_cmp(&other.heat).unwrap_or(Ordering::Equal)
+            }
+        }
+        impl PartialOrd for PriorityNode {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        
         let mut blob_chunks: Vec<Point> = Vec::new();
-        let mut queue: Vec<Point> = vec![peak];
-        visited[peak.y as usize][peak.x as usize] = true;
+        let mut pq = BinaryHeap::new();
+        
+        let peak_idx = (peak.y * grid_width + peak.x) as usize;
+        pq.push(PriorityNode { point: peak, heat: heatmap[peak_idx] });
+        visited[peak_idx] = true;
 
-        let grid_height = heatmap.len() as i32;
-        let grid_width_i32 = heatmap[0].len() as i32;
+        // Priority-based growth: explore high heat areas first
+        while let Some(node) = pq.pop() {
+            blob_chunks.push(node.point);
 
-        while let Some(current) = queue.pop() {
-            blob_chunks.push(current);
-
-            // Check all 4 direct neighbors (not diagonals).
+            // Check all 4 direct neighbors
             for (dx, dy) in &[(0, 1), (0, -1), (1, 0), (-1, 0)] {
-                let nx = current.x as i32 + dx;
-                let ny = current.y as i32 + dy;
+                let nx = node.point.x as i32 + dx;
+                let ny = node.point.y as i32 + dy;
 
-                if nx >= 0 && nx < grid_width_i32 && ny >= 0 && ny < grid_height {
-                    let nx_u = nx as usize;
-                    let ny_u = ny as usize;
-
-                    if !visited[ny_u][nx_u] && heatmap[ny_u][nx_u] >= REGION_GROW_THRESHOLD {
-                        visited[ny_u][nx_u] = true;
-                        queue.push(Point {
-                            x: nx_u as u32,
-                            y: ny_u as u32,
+                if nx >= 0 && nx < grid_width as i32 && ny >= 0 && ny < grid_height as i32 {
+                    let neighbor_idx = (ny as u32 * grid_width + nx as u32) as usize;
+                    
+                    if !visited[neighbor_idx] && heatmap[neighbor_idx] >= REGION_GROW_THRESHOLD {
+                        visited[neighbor_idx] = true;
+                        pq.push(PriorityNode {
+                            point: Point { x: nx as u32, y: ny as u32 },
+                            heat: heatmap[neighbor_idx],
                         });
                     }
                 }
