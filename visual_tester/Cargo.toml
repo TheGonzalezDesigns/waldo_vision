@@ -7,3 +7,9 @@ edition = "2024"
 waldo_vision = { path = "../waldo_vision" }
 opencv = { version = "0.88.8", default-features = false, features = ["videoio", "highgui", "imgproc"] }
 tokio = { version = "1", features = ["full"] }
+image = "0.25.6"
+waldo_vision_visualizer = { path = "../waldo_vision_visualizer", optional = true }
+
+[features]
+default = []
+web = ["waldo_vision_visualizer/web"]
