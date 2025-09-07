@@ -5,7 +5,7 @@
 // events, called "Moments."
 
 use crate::core_modules::smart_blob::SmartBlob;
-use crate::core_modules::tracker::{TrackedBlob, Tracker, TrackedState};
+use crate::core_modules::tracker::{TrackedBlob, TrackedState, Tracker};
 use crate::pipeline::PipelineConfig;
 use std::collections::HashSet;
 
@@ -63,7 +63,11 @@ impl SceneManager {
         }
     }
 
-    pub fn update(&mut self, blobs: Vec<SmartBlob>, config: &PipelineConfig) -> (Vec<Moment>, Vec<Moment>) {
+    pub fn update(
+        &mut self,
+        blobs: Vec<SmartBlob>,
+        config: &PipelineConfig,
+    ) -> (Vec<Moment>, Vec<Moment>) {
         self.frame_count += 1;
         let tracked_blobs = self.tracker.update(blobs, config);
 
@@ -73,7 +77,11 @@ impl SceneManager {
         for tracked_blob in tracked_blobs {
             current_tracked_ids.insert(tracked_blob.id);
 
-            let moment = if let Some(m) = self.active_moments.iter_mut().find(|m| m.id == tracked_blob.id) {
+            let moment = if let Some(m) = self
+                .active_moments
+                .iter_mut()
+                .find(|m| m.id == tracked_blob.id)
+            {
                 m.update(tracked_blob, self.frame_count);
                 m
             } else {
@@ -82,8 +90,9 @@ impl SceneManager {
                 self.active_moments.push(new_moment);
                 self.active_moments.last_mut().unwrap()
             };
-            
-            moment.is_significant = tracked_blob.state == TrackedState::New || tracked_blob.state == TrackedState::Anomalous;
+
+            moment.is_significant = tracked_blob.state == TrackedState::New
+                || tracked_blob.state == TrackedState::Anomalous;
         }
 
         let mut still_active = Vec::new();
@@ -102,7 +111,7 @@ impl SceneManager {
         self.active_moments = still_active;
         (newly_started_moments, newly_completed_moments)
     }
-    
+
     pub fn get_active_moments(&self) -> &Vec<Moment> {
         &self.active_moments
     }
