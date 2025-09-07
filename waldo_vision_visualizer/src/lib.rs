@@ -101,23 +101,67 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
         const btnPause = document.getElementById('btn-pause');
         if(btnPlay){ btnPlay.onclick = ()=> fetch('/control/play', { method:'POST' }).then(()=>status('playing')); }
         if(btnPause){ btnPause.onclick = ()=> fetch('/control/pause', { method:'POST' }).then(()=>status('paused')); }
-        const pc = new RTCPeerConnection({ iceServers: [{urls:['stun:stun.l.google.com:19302']}] });
+
+        const params = new URLSearchParams(location.search);
+        const relayOnly = params.get('relay') === '1' || true; // default to relay for reliability
+        const TURN_HOST = (params.get('turn') || (location.hostname));
+        const TURN_USER = (params.get('tu') || 'waldo');
+        const TURN_PASS = (params.get('tp') || 'SuperSecretPassword');
+        const iceServers = [
+            { urls: ['stun:stun.l.google.com:19302'] },
+            { urls: [`turn:${TURN_HOST}:3478?transport=udp`], username: TURN_USER, credential: TURN_PASS },
+            { urls: [`turn:${TURN_HOST}:3478?transport=tcp`], username: TURN_USER, credential: TURN_PASS },
+        ];
+        const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: relayOnly ? 'relay' : 'all' });
         const frames = pc.createDataChannel('frames', {ordered:false, maxRetransmits:0});
         const meta = pc.createDataChannel('meta', {ordered:true});
         const canvas = document.getElementById('preview');
         const ctx = canvas.getContext('2d');
+        pc.oniceconnectionstatechange = ()=> status('ice: ' + pc.iceConnectionState);
+        pc.onconnectionstatechange = ()=> status('pc: ' + pc.connectionState);
         frames.binaryType='arraybuffer';
-        frames.onopen = ()=> status('connected');
-        frames.onclose = ()=> status('disconnected');
+        frames.onopen = ()=> status('frames: open');
+        frames.onclose = ()=> status('frames: closed');
+        meta.onopen = ()=> status('meta: open');
+        meta.onclose = ()=> status('meta: closed');
         frames.onmessage = async (ev)=>{
             if(!(ev.data instanceof ArrayBuffer)) return;
             const blob = new Blob([ev.data], {type:'image/jpeg'});
             const bmp = await createImageBitmap(blob);
             ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
         };
-        meta.onmessage = (ev)=>{ /* optional meta display */ };
+        meta.onmessage = (ev)=>{
+            try {
+              const o = JSON.parse(ev.data);
+              if(o && o.type==='server_info') status('server: nat_ip='+o.nat_ip+' ice='+o.ice_range);
+            } catch(_) { /* ignore non-json meta */ }
+        };
+
+        // Setup signaling with buffering until WS opens
         const ws = new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/signaling');
-        pc.onicecandidate = (ev)=>{ if(ev.candidate){ ws.send(JSON.stringify({type:'ice', candidate: ev.candidate})); } };
+        let wsOpen = false;
+        const iceQueue = [];
+        ws.addEventListener('open', async ()=>{
+            wsOpen = true;
+            // Create and send offer once WS is ready
+            const offer = await pc.createOffer({});
+            await pc.setLocalDescription(offer);
+            ws.send(JSON.stringify({type:'offer', sdp: offer.sdp}));
+            // Flush queued ICE
+            while(iceQueue.length){ ws.send(JSON.stringify({type:'ice', candidate: iceQueue.shift()})); }
+        });
+        ws.addEventListener('close', ()=> status('ws closed'));
+        ws.addEventListener('error', ()=> status('ws error'));
+
+        pc.onicecandidate = (ev)=>{
+            if(!ev.candidate) return;
+            if(wsOpen) {
+                try { ws.send(JSON.stringify({type:'ice', candidate: ev.candidate})); } catch(e) { iceQueue.push(ev.candidate); }
+            } else {
+                iceQueue.push(ev.candidate);
+            }
+        };
+
         ws.onmessage = async (ev)=>{
             const msg = JSON.parse(ev.data);
             if(msg.type==='answer'){
@@ -126,11 +170,6 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
                 try{ await pc.addIceCandidate(msg.candidate); }catch(e){ console.warn(e); }
             }
         };
-        (async ()=>{
-            const offer = await pc.createOffer({});
-            await pc.setLocalDescription(offer);
-            ws.onopen = ()=> ws.send(JSON.stringify({type:'offer', sdp: offer.sdp}));
-        })();
     })();"#;
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -141,11 +180,11 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
         #[serde(rename = "ice")] Ice { candidate: RTCIceCandidateInit },
     }
 
-    fn ws_handler_with_bus(ws: WebSocketUpgrade, bus: FrameBus, cfg: ServerConfig) -> impl IntoResponse {
-        ws.on_upgrade(move |socket| ws_conn(socket, bus, cfg))
+    fn ws_handler_with_bus(ws: WebSocketUpgrade, bus: FrameBus, cfg: ServerConfig, control: ControlHandle) -> impl IntoResponse {
+        ws.on_upgrade(move |socket| ws_conn(socket, bus, cfg, control))
     }
 
-    async fn ws_conn(mut socket: WebSocket, bus: FrameBus, cfg: ServerConfig) {
+    async fn ws_conn(mut socket: WebSocket, bus: FrameBus, cfg: ServerConfig, control: ControlHandle) {
         // Build a PeerConnection with optional NAT 1:1 IP if provided
         use webrtc::api::setting_engine::SettingEngine;
         use webrtc::ice_transport::ice_candidate_type::RTCIceCandidateType;
@@ -154,19 +193,40 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
             se.set_nat_1to1_ips(vec![ip], RTCIceCandidateType::Host);
         }
         let api = APIBuilder::new().with_setting_engine(se).build();
-        let config = RTCConfiguration { ice_servers: vec![RTCIceServer{ urls: vec!["stun:stun.l.google.com:19302".to_string()], ..Default::default()}], ..Default::default() };
-        let pc = match api.new_peer_connection(config).await { Ok(pc)=>pc, Err(e)=>{ let _=socket.send(Message::Text(format!("error: {e}"))).await; return; } };
+        // Configure STUN + TURN; TURN host/user/pass from env, fallback to public IP on 3478
+        let turn_host = std::env::var("WV_TURN_HOST").unwrap_or_else(|_| cfg.nat_public_ip.clone().unwrap_or_else(|| "".into()));
+        let turn_user = std::env::var("WV_TURN_USER").unwrap_or_else(|_| "waldo".into());
+        let turn_pass = std::env::var("WV_TURN_PASS").unwrap_or_else(|_| "SuperSecretPassword".into());
+        let mut ice_servers = vec![RTCIceServer{ urls: vec!["stun:stun.l.google.com:19302".to_string()], ..Default::default()}];
+        if !turn_host.is_empty() {
+            ice_servers.push(RTCIceServer{ urls: vec![format!("turn:{}:3478?transport=udp", turn_host)], username: turn_user.clone(), credential: turn_pass.clone(), ..Default::default()});
+            ice_servers.push(RTCIceServer{ urls: vec![format!("turn:{}:3478?transport=tcp", turn_host)], username: turn_user.clone(), credential: turn_pass.clone(), ..Default::default()});
+        }
+        let config = RTCConfiguration { ice_servers, ..Default::default() };
+        let pc = match api.new_peer_connection(config).await {
+            Ok(pc)=>pc,
+            Err(e)=>{ let _=socket.send(Message::Text(serde_json::json!({"type":"error","message":format!("peer_connection: {}", e)}).to_string())).await; return; }
+        };
 
         // Hook DataChannels created by the browser and forward frames/meta
         let frames_tx = bus.frames_tx.clone();
         let meta_tx = bus.meta_tx.clone();
 
+        let play_tx_for_frames = control.play_tx.clone();
+        let nat_ip_str = cfg.nat_public_ip.clone().unwrap_or_else(|| std::env::var("WV_NAT_IP").unwrap_or_else(|_| "unset".into()));
+        let ice_range_str = if let (Some(s), Some(e)) = (cfg.udp_port_start, cfg.udp_port_end) { format!("{}-{}", s, e) } else { std::env::var("WV_ICE_PORT_RANGE").unwrap_or_else(|_| "unset".into()) };
+
         pc.on_data_channel(Box::new(move |dc| {
             let label = dc.label().to_string();
             if label == "frames" {
                 let mut rx = frames_tx.subscribe();
+                let tx_clone = play_tx_for_frames.clone();
                 Box::pin(async move {
-                    dc.on_open(Box::new(move || { Box::pin(async {}) }));
+                    // When frames DataChannel opens, auto-play so streaming starts only after peer is ready
+                    dc.on_open(Box::new(move || {
+                        let tx2 = tx_clone.clone();
+                        Box::pin(async move { let _ = tx2.send(true); })
+                    }));
                     loop {
                         match rx.recv().await {
                             Ok(pkt) => {
@@ -180,8 +240,20 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
                 })
             } else if label == "meta" {
                 let mut rxm = meta_tx.subscribe();
+                // Prepare server info message and use a clone of the data channel for the on_open callback
+                let info_nat = nat_ip_str.clone();
+                let info_range = ice_range_str.clone();
+                let dc_for_open = dc.clone();
                 Box::pin(async move {
-                    dc.on_open(Box::new(move || { Box::pin(async {}) }));
+                    let info = format!("{{\"type\":\"server_info\",\"nat_ip\":\"{}\",\"ice_range\":\"{}\"}}", info_nat, info_range);
+                    let msg = info.clone();
+                    dc.on_open(Box::new(move || {
+                        let msg2 = msg.clone();
+                        let dc2 = dc_for_open.clone();
+                        Box::pin(async move {
+                            let _ = dc2.send_text(msg2).await;
+                        })
+                    }));
                     loop {
                         match rxm.recv().await {
                             Ok(meta) => {
@@ -222,9 +294,9 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
                         match sig {
                             SigMsg::Offer { sdp } => {
                                 let offer = RTCSessionDescription::offer(sdp).unwrap_or_default();
-                                if let Err(e) = pc.set_remote_description(offer).await { let _=ws_tx_arc.lock().await.send(Message::Text(format!("error: {e}"))).await; return; }
-                                let answer = match pc.create_answer(None).await { Ok(a)=>a, Err(e)=>{ let _=ws_tx_arc.lock().await.send(Message::Text(format!("error: {e}"))).await; return; } };
-                                if let Err(e) = pc.set_local_description(answer.clone()).await { let _=ws_tx_arc.lock().await.send(Message::Text(format!("error: {e}"))).await; return; }
+                                if let Err(e) = pc.set_remote_description(offer).await { let _=ws_tx_arc.lock().await.send(Message::Text(serde_json::json!({"type":"error","message":format!("set_remote_description: {}", e)}).to_string())).await; return; }
+                                let answer = match pc.create_answer(None).await { Ok(a)=>a, Err(e)=>{ let _=ws_tx_arc.lock().await.send(Message::Text(serde_json::json!({"type":"error","message":format!("create_answer: {}", e)}).to_string())).await; return; } };
+                                if let Err(e) = pc.set_local_description(answer.clone()).await { let _=ws_tx_arc.lock().await.send(Message::Text(serde_json::json!({"type":"error","message":format!("set_local_description: {}", e)}).to_string())).await; return; }
                                 let _ = ws_tx_arc.lock().await.send(Message::Text(serde_json::to_string(&SigMsg::Answer{ sdp: answer.sdp }).unwrap())).await;
                             }
                             SigMsg::Ice { candidate } => { let _ = pc.add_ice_candidate(candidate).await; }
@@ -241,9 +313,46 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
 
     let leptos_options = LeptosOptions::builder().output_name("waldo_vision_visualizer").site_root(".").build();
     use axum::{response::IntoResponse as _, routing::post};
+    use axum::response::Html;
+    const INDEX_HTML: &str = r#"<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>Waldo Vision Visualizer</title>
+  <style>
+    body{background:#111;color:#ddd;font-family:system-ui, sans-serif;margin:0;padding:16px}
+    .bar{margin:8px 0;display:flex;gap:12px;align-items:center}
+    button{padding:6px 12px;background:#333;border:1px solid #555;color:#fff;border-radius:6px;cursor:pointer}
+    canvas{border:1px solid #444;max-width:100%;height:auto}
+    #status{font:12px monospace;color:#999}
+    details{margin-top:12px}
+    #diag-log{background:#0b0b0b;border:1px solid #333;padding:8px;border-radius:6px;max-height:280px;overflow:auto;font:12px/1.4 monospace}
+  </style>
+  </head>
+  <body>
+   <h2>Waldo Vision Visualizer</h2>
+   <div class=\"bar\">
+     <button id=\"btn-play\">Play</button>
+     <button id=\"btn-pause\">Pause</button>
+     <span id=\"status\">idle</span>
+   </div>
+   <canvas id=\"preview\" width=\"1280\" height=\"720\"></canvas>
+   <details open>
+     <summary>Diagnostics</summary>
+     <div id=\"diag\">
+       <div style=\"margin:6px 0;\">NAT/ICE reported by server will appear here.</div>
+       <pre id=\"diag-log\"></pre>
+     </div>
+   </details>
+   <script src=\"/client.js\"></script>
+  </body>
+</html>"#;
+
     let mut base = Router::new()
-        .leptos_routes(&leptos_options, Vec::new(), || view! { <App/> })
+        .route("/", get(|| async { Html(INDEX_HTML) }))
         .route("/healthz", get(|| async { "ok" }))
+        .leptos_routes(&leptos_options, Vec::new(), || view! { <App/> })
         .with_state(leptos_options);
 
     // Merge env into cfg if present
@@ -253,11 +362,46 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
 
     let bus_ws = bus.clone();
     let cfg_ws = cfg.clone();
+    let control_ws = control.clone();
     base = base
         .route("/ws/signaling", get(move |ws: WebSocketUpgrade| {
             let bus = bus_ws.clone();
             let cfg = cfg_ws.clone();
-            async move { ws_handler_with_bus(ws, bus, cfg) }
+            let control = control_ws.clone();
+            async move { ws_handler_with_bus(ws, bus, cfg, control) }
+        }))
+        .route("/stream.mjpeg", get({
+            let bus_stream = bus.clone();
+            let control_stream = control.clone();
+            move || async move {
+                use axum::response::IntoResponse;
+                use axum::http::{HeaderMap, HeaderValue};
+                use bytes::Bytes;
+                use async_stream::stream;
+                let boundary = "frame";
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    axum::http::header::CONTENT_TYPE,
+                    HeaderValue::from_static("multipart/x-mixed-replace;boundary=frame"),
+                );
+                // Auto-start processing when MJPEG stream is requested
+                let _ = control_stream.play_tx.send(true);
+                let mut rx = bus_stream.frames_tx.subscribe();
+                let s = stream! {
+                    loop {
+                        match rx.recv().await {
+                            Ok(pkt) => {
+                                let header = format!("--{}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", boundary, pkt.data.len());
+                                yield Ok::<Bytes, axum::Error>(Bytes::from(header));
+                                yield Ok::<Bytes, axum::Error>(Bytes::from(pkt.data.to_vec()));
+                                yield Ok::<Bytes, axum::Error>(Bytes::from("\r\n"));
+                            }
+                            Err(_) => { break; }
+                        }
+                    }
+                };
+                (headers, axum::body::Body::from_stream(s)).into_response()
+            }
         }))
         .route("/client.js", get(|| async {
             let mut resp = axum::response::Response::new(axum::body::Body::from(CLIENT_JS));

@@ -266,11 +266,12 @@ fn is_size_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool
     }
 
     let (mean, std_dev) = calculate_scalar_stats(&size_changes);
-    let current_change = (blob.size_history.back().unwrap()
-        - blob.size_history.get(blob.size_history.len() - 2).unwrap())
-        as f64;
+    // Compute signed difference to avoid usize underflow when size decreases.
+    let last = *blob.size_history.back().unwrap() as f64;
+    let prev = *blob.size_history.get(blob.size_history.len() - 2).unwrap() as f64;
+    let current_change = last - prev;
 
-    (current_change - mean) / std_dev.max(0.01) > config.behavioral_anomaly_threshold
+    ((current_change - mean) / std_dev.max(0.01)).abs() > config.behavioral_anomaly_threshold
 }
 
 fn is_hue_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
@@ -281,7 +282,7 @@ fn is_hue_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool 
     let (mean, std_dev) = calculate_scalar_stats(&hue_scores);
     let current_hue = blob.latest_blob.average_anomaly.hue_score;
 
-    (current_hue - mean) / std_dev.max(0.01) > config.behavioral_anomaly_threshold
+    ((current_hue - mean) / std_dev.max(0.01)).abs() > config.behavioral_anomaly_threshold
 }
 
 fn calculate_scalar_stats(data: &[f64]) -> (f64, f64) {

@@ -15,6 +15,7 @@ web = [
     "dep:webrtc",
     "dep:bytes",
     "dep:futures-util",
+    "dep:async-stream",
 ]
 
 [dependencies]
@@ -28,3 +29,4 @@ webrtc = { version = "0.10", optional = true }
 anyhow = { version = "1" }
 bytes = { version = "1", optional = true }
 futures-util = { version = "0.3", optional = true }
+async-stream = { version = "0.3", optional = true }

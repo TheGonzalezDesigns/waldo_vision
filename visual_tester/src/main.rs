@@ -90,6 +90,8 @@ async fn main() -> opencv::Result<()> {
     let mut frame = Mat::default();
     #[cfg(feature = "web")]
     let stream_enabled = serve_addr.is_some();
+    use tokio::time::{sleep, Duration};
+    let frame_delay = if fps > 0.0 { Duration::from_secs_f64(1.0 / fps.max(1.0)) } else { Duration::from_millis(33) };
     loop {
         // Wait for play command from UI
         #[cfg(feature = "web")]
@@ -116,7 +118,7 @@ async fn main() -> opencv::Result<()> {
         core::add_weighted(&output_frame, 1.0, &heatmap_overlay, 0.8, 0.0, &mut final_frame, -1).unwrap();
 
         #[cfg(feature = "web")]
-        if stream_enabled && (frame_index % 3 == 0) {
+        if stream_enabled {
             if let Some(bus) = &frame_bus {
                 let mut rgba_out = Mat::default();
                 imgproc::cvt_color(&final_frame, &mut rgba_out, imgproc::COLOR_BGR2RGBA, 0).unwrap();
@@ -131,6 +133,8 @@ async fn main() -> opencv::Result<()> {
         }
 
         writer.write(&final_frame)?;
+        // Pace processing to near real-time so the browser can keep up
+        sleep(frame_delay).await;
         frame_index += 1;
     }
 
