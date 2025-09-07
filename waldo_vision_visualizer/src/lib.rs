@@ -64,9 +64,13 @@ pub struct ControlHandle {
 }
 
 #[cfg(feature = "web")]
-pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: ControlHandle) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    use axum::{response::IntoResponse, routing::get, Router};
+pub async fn start_server(
+    bus: FrameBus,
+    mut cfg: ServerConfig,
+    control: ControlHandle,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
     use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+    use axum::{Router, response::IntoResponse, routing::get};
     use leptos::*;
     use leptos_axum::LeptosRoutes;
     use serde::{Deserialize, Serialize};
@@ -175,16 +179,29 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(tag = "type")]
     enum SigMsg {
-        #[serde(rename = "offer")] Offer { sdp: String },
-        #[serde(rename = "answer")] Answer { sdp: String },
-        #[serde(rename = "ice")] Ice { candidate: RTCIceCandidateInit },
+        #[serde(rename = "offer")]
+        Offer { sdp: String },
+        #[serde(rename = "answer")]
+        Answer { sdp: String },
+        #[serde(rename = "ice")]
+        Ice { candidate: RTCIceCandidateInit },
     }
 
-    fn ws_handler_with_bus(ws: WebSocketUpgrade, bus: FrameBus, cfg: ServerConfig, control: ControlHandle) -> impl IntoResponse {
+    fn ws_handler_with_bus(
+        ws: WebSocketUpgrade,
+        bus: FrameBus,
+        cfg: ServerConfig,
+        control: ControlHandle,
+    ) -> impl IntoResponse {
         ws.on_upgrade(move |socket| ws_conn(socket, bus, cfg, control))
     }
 
-    async fn ws_conn(mut socket: WebSocket, bus: FrameBus, cfg: ServerConfig, control: ControlHandle) {
+    async fn ws_conn(
+        mut socket: WebSocket,
+        bus: FrameBus,
+        cfg: ServerConfig,
+        control: ControlHandle,
+    ) {
         // Build a PeerConnection with optional NAT 1:1 IP if provided
         use webrtc::api::setting_engine::SettingEngine;
         use webrtc::ice_transport::ice_candidate_type::RTCIceCandidateType;
@@ -194,18 +211,39 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
         }
         let api = APIBuilder::new().with_setting_engine(se).build();
         // Configure STUN + TURN; TURN host/user/pass from env, fallback to public IP on 3478
-        let turn_host = std::env::var("WV_TURN_HOST").unwrap_or_else(|_| cfg.nat_public_ip.clone().unwrap_or_else(|| "".into()));
+        let turn_host = std::env::var("WV_TURN_HOST")
+            .unwrap_or_else(|_| cfg.nat_public_ip.clone().unwrap_or_else(|| "".into()));
         let turn_user = std::env::var("WV_TURN_USER").unwrap_or_else(|_| "waldo".into());
-        let turn_pass = std::env::var("WV_TURN_PASS").unwrap_or_else(|_| "SuperSecretPassword".into());
-        let mut ice_servers = vec![RTCIceServer{ urls: vec!["stun:stun.l.google.com:19302".to_string()], ..Default::default()}];
+        let turn_pass =
+            std::env::var("WV_TURN_PASS").unwrap_or_else(|_| "SuperSecretPassword".into());
+        let mut ice_servers = vec![RTCIceServer {
+            urls: vec!["stun:stun.l.google.com:19302".to_string()],
+            ..Default::default()
+        }];
         if !turn_host.is_empty() {
-            ice_servers.push(RTCIceServer{ urls: vec![format!("turn:{}:3478?transport=udp", turn_host)], username: turn_user.clone(), credential: turn_pass.clone(), ..Default::default()});
-            ice_servers.push(RTCIceServer{ urls: vec![format!("turn:{}:3478?transport=tcp", turn_host)], username: turn_user.clone(), credential: turn_pass.clone(), ..Default::default()});
+            ice_servers.push(RTCIceServer {
+                urls: vec![format!("turn:{}:3478?transport=udp", turn_host)],
+                username: turn_user.clone(),
+                credential: turn_pass.clone(),
+                ..Default::default()
+            });
+            ice_servers.push(RTCIceServer {
+                urls: vec![format!("turn:{}:3478?transport=tcp", turn_host)],
+                username: turn_user.clone(),
+                credential: turn_pass.clone(),
+                ..Default::default()
+            });
         }
-        let config = RTCConfiguration { ice_servers, ..Default::default() };
+        let config = RTCConfiguration {
+            ice_servers,
+            ..Default::default()
+        };
         let pc = match api.new_peer_connection(config).await {
-            Ok(pc)=>pc,
-            Err(e)=>{ let _=socket.send(Message::Text(serde_json::json!({"type":"error","message":format!("peer_connection: {}", e)}).to_string())).await; return; }
+            Ok(pc) => pc,
+            Err(e) => {
+                let _=socket.send(Message::Text(serde_json::json!({"type":"error","message":format!("peer_connection: {}", e)}).to_string())).await;
+                return;
+            }
         };
 
         // Hook DataChannels created by the browser and forward frames/meta
@@ -213,8 +251,15 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
         let meta_tx = bus.meta_tx.clone();
 
         let play_tx_for_frames = control.play_tx.clone();
-        let nat_ip_str = cfg.nat_public_ip.clone().unwrap_or_else(|| std::env::var("WV_NAT_IP").unwrap_or_else(|_| "unset".into()));
-        let ice_range_str = if let (Some(s), Some(e)) = (cfg.udp_port_start, cfg.udp_port_end) { format!("{}-{}", s, e) } else { std::env::var("WV_ICE_PORT_RANGE").unwrap_or_else(|_| "unset".into()) };
+        let nat_ip_str = cfg
+            .nat_public_ip
+            .clone()
+            .unwrap_or_else(|| std::env::var("WV_NAT_IP").unwrap_or_else(|_| "unset".into()));
+        let ice_range_str = if let (Some(s), Some(e)) = (cfg.udp_port_start, cfg.udp_port_end) {
+            format!("{}-{}", s, e)
+        } else {
+            std::env::var("WV_ICE_PORT_RANGE").unwrap_or_else(|_| "unset".into())
+        };
 
         pc.on_data_channel(Box::new(move |dc| {
             let label = dc.label().to_string();
@@ -225,15 +270,21 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
                     // When frames DataChannel opens, auto-play so streaming starts only after peer is ready
                     dc.on_open(Box::new(move || {
                         let tx2 = tx_clone.clone();
-                        Box::pin(async move { let _ = tx2.send(true); })
+                        Box::pin(async move {
+                            let _ = tx2.send(true);
+                        })
                     }));
                     loop {
                         match rx.recv().await {
                             Ok(pkt) => {
                                 // Send as binary (JPEG/WebP) blob
-                                let _ = dc.send(&bytes::Bytes::from(pkt.data.as_ref().to_vec())).await;
+                                let _ = dc
+                                    .send(&bytes::Bytes::from(pkt.data.as_ref().to_vec()))
+                                    .await;
                             }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { continue; }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                continue;
+                            }
                             Err(_) => break,
                         }
                     }
@@ -245,7 +296,10 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
                 let info_range = ice_range_str.clone();
                 let dc_for_open = dc.clone();
                 Box::pin(async move {
-                    let info = format!("{{\"type\":\"server_info\",\"nat_ip\":\"{}\",\"ice_range\":\"{}\"}}", info_nat, info_range);
+                    let info = format!(
+                        "{{\"type\":\"server_info\",\"nat_ip\":\"{}\",\"ice_range\":\"{}\"}}",
+                        info_nat, info_range
+                    );
                     let msg = info.clone();
                     dc.on_open(Box::new(move || {
                         let msg2 = msg.clone();
@@ -257,14 +311,20 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
                     loop {
                         match rxm.recv().await {
                             Ok(meta) => {
-                                if let Ok(s) = serde_json::to_string(&meta) { let _ = dc.send_text(s).await; }
+                                if let Ok(s) = serde_json::to_string(&meta) {
+                                    let _ = dc.send_text(s).await;
+                                }
                             }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { continue; }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                continue;
+                            }
                             Err(_) => break,
                         }
                     }
                 })
-            } else { Box::pin(async {}) }
+            } else {
+                Box::pin(async {})
+            }
         }));
 
         // Split socket so ICE can be sent from callback
@@ -294,12 +354,33 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
                         match sig {
                             SigMsg::Offer { sdp } => {
                                 let offer = RTCSessionDescription::offer(sdp).unwrap_or_default();
-                                if let Err(e) = pc.set_remote_description(offer).await { let _=ws_tx_arc.lock().await.send(Message::Text(serde_json::json!({"type":"error","message":format!("set_remote_description: {}", e)}).to_string())).await; return; }
-                                let answer = match pc.create_answer(None).await { Ok(a)=>a, Err(e)=>{ let _=ws_tx_arc.lock().await.send(Message::Text(serde_json::json!({"type":"error","message":format!("create_answer: {}", e)}).to_string())).await; return; } };
-                                if let Err(e) = pc.set_local_description(answer.clone()).await { let _=ws_tx_arc.lock().await.send(Message::Text(serde_json::json!({"type":"error","message":format!("set_local_description: {}", e)}).to_string())).await; return; }
-                                let _ = ws_tx_arc.lock().await.send(Message::Text(serde_json::to_string(&SigMsg::Answer{ sdp: answer.sdp }).unwrap())).await;
+                                if let Err(e) = pc.set_remote_description(offer).await {
+                                    let _=ws_tx_arc.lock().await.send(Message::Text(serde_json::json!({"type":"error","message":format!("set_remote_description: {}", e)}).to_string())).await;
+                                    return;
+                                }
+                                let answer = match pc.create_answer(None).await {
+                                    Ok(a) => a,
+                                    Err(e) => {
+                                        let _=ws_tx_arc.lock().await.send(Message::Text(serde_json::json!({"type":"error","message":format!("create_answer: {}", e)}).to_string())).await;
+                                        return;
+                                    }
+                                };
+                                if let Err(e) = pc.set_local_description(answer.clone()).await {
+                                    let _=ws_tx_arc.lock().await.send(Message::Text(serde_json::json!({"type":"error","message":format!("set_local_description: {}", e)}).to_string())).await;
+                                    return;
+                                }
+                                let _ = ws_tx_arc
+                                    .lock()
+                                    .await
+                                    .send(Message::Text(
+                                        serde_json::to_string(&SigMsg::Answer { sdp: answer.sdp })
+                                            .unwrap(),
+                                    ))
+                                    .await;
                             }
-                            SigMsg::Ice { candidate } => { let _ = pc.add_ice_candidate(candidate).await; }
+                            SigMsg::Ice { candidate } => {
+                                let _ = pc.add_ice_candidate(candidate).await;
+                            }
                             _ => {}
                         }
                     }
@@ -311,9 +392,14 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
         let _ = pc.close().await;
     }
 
-    let leptos_options = LeptosOptions::builder().output_name("waldo_vision_visualizer").site_root(".").build();
-    use axum::{response::IntoResponse as _, routing::post};
+    let leptos_options = LeptosOptions::builder()
+        .output_name("waldo_vision_visualizer")
+        .site_root(".")
+        .build();
+    use axum::extract::{Path, Query};
     use axum::response::Html;
+    use axum::{response::IntoResponse as _, routing::post};
+    use std::collections::HashMap;
     const INDEX_HTML: &str = r#"<!doctype html>
 <html lang=\"en\">
 <head>
@@ -357,8 +443,24 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
 
     // Merge env into cfg if present
     // Read env for future use (NAT / ICE port range)
-    if cfg.nat_public_ip.is_none() { if let Ok(ip) = std::env::var("WV_NAT_IP") { if !ip.is_empty() { cfg.nat_public_ip = Some(ip); } } }
-    if cfg.udp_port_start.is_none() || cfg.udp_port_end.is_none() { if let Ok(r) = std::env::var("WV_ICE_PORT_RANGE") { let parts: Vec<&str> = r.split('-').collect(); if parts.len() == 2 { if let (Ok(s), Ok(e)) = (parts[0].parse::<u16>(), parts[1].parse::<u16>()) { cfg.udp_port_start = Some(s); cfg.udp_port_end = Some(e); } } } }
+    if cfg.nat_public_ip.is_none() {
+        if let Ok(ip) = std::env::var("WV_NAT_IP") {
+            if !ip.is_empty() {
+                cfg.nat_public_ip = Some(ip);
+            }
+        }
+    }
+    if cfg.udp_port_start.is_none() || cfg.udp_port_end.is_none() {
+        if let Ok(r) = std::env::var("WV_ICE_PORT_RANGE") {
+            let parts: Vec<&str> = r.split('-').collect();
+            if parts.len() == 2 {
+                if let (Ok(s), Ok(e)) = (parts[0].parse::<u16>(), parts[1].parse::<u16>()) {
+                    cfg.udp_port_start = Some(s);
+                    cfg.udp_port_end = Some(e);
+                }
+            }
+        }
+    }
 
     let bus_ws = bus.clone();
     let cfg_ws = cfg.clone();
@@ -427,7 +529,9 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
 
     let bind_addr = cfg.bind_addr.clone();
     let server = tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(&bind_addr).await.expect("bind addr");
+        let listener = tokio::net::TcpListener::bind(&bind_addr)
+            .await
+            .expect("bind addr");
         println!(
             "Visualizer server listening on http://{} (NAT_IP={}, UDP_RANGE={}..{})",
             bind_addr,
@@ -442,6 +546,11 @@ pub async fn start_server(bus: FrameBus, mut cfg: ServerConfig, control: Control
 }
 
 #[cfg(not(feature = "web"))]
-pub async fn start_server(_bus: FrameBus, _cfg: ServerConfig) -> anyhow::Result<tokio::task::JoinHandle<()>> {
-    Err(anyhow::anyhow!("web feature not enabled for waldo_vision_visualizer"))
+pub async fn start_server(
+    _bus: FrameBus,
+    _cfg: ServerConfig,
+) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+    Err(anyhow::anyhow!(
+        "web feature not enabled for waldo_vision_visualizer"
+    ))
 }
