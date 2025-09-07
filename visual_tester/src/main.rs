@@ -6,13 +6,15 @@ use opencv::{
 };
 use std::env;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::task::JoinSet;
 use waldo_vision::pipeline::{
     ChunkStatus, FrameAnalysis, PipelineConfig, TrackedBlob, TrackedState, VisionPipeline,
 };
 #[cfg(feature = "web")]
-use waldo_vision_visualizer::{FrameBus, FrameFormat, FramePacket, Meta, MetaBlobSummary, ServerConfig};
-use std::time::{SystemTime, UNIX_EPOCH};
+use waldo_vision_visualizer::{
+    FrameBus, FrameFormat, FramePacket, Meta, MetaBlobSummary, ServerConfig,
+};
 
 #[tokio::main]
 async fn main() -> opencv::Result<()> {
@@ -43,23 +45,40 @@ async fn main() -> opencv::Result<()> {
     let fps = cap.get(videoio::CAP_PROP_FPS)?;
 
     #[cfg(feature = "web")]
-    let (frame_bus, mut play_rx): (Option<FrameBus>, Option<tokio::sync::watch::Receiver<bool>>) = serve_addr.as_ref().map(|addr| {
-        println!("Starting visualizer server at {}...", addr);
-        let bus = FrameBus::new(2);
-        let cfg = ServerConfig { bind_addr: addr.clone(), nat_public_ip: None, udp_port_start: None, udp_port_end: None };
-        let (play_tx, play_rx) = tokio::sync::watch::channel(false);
-        let control = waldo_vision_visualizer::ControlHandle { play_tx };
-        tokio::spawn({
-            let bus_clone = bus.clone();
-            let control_clone = control.clone();
-            async move { let _ = waldo_vision_visualizer::start_server(bus_clone, cfg, control_clone).await; }
-        });
-        (Some(bus), Some(play_rx))
-    }).unwrap_or((None, None));
+    let (frame_bus, mut play_rx): (
+        Option<FrameBus>,
+        Option<tokio::sync::watch::Receiver<bool>>,
+    ) = serve_addr
+        .as_ref()
+        .map(|addr| {
+            println!("Starting visualizer server at {}...", addr);
+            let bus = FrameBus::new(2);
+            let cfg = ServerConfig {
+                bind_addr: addr.clone(),
+                nat_public_ip: None,
+                udp_port_start: None,
+                udp_port_end: None,
+            };
+            let (play_tx, play_rx) = tokio::sync::watch::channel(false);
+            let control = waldo_vision_visualizer::ControlHandle { play_tx };
+            tokio::spawn({
+                let bus_clone = bus.clone();
+                let control_clone = control.clone();
+                async move {
+                    let _ =
+                        waldo_vision_visualizer::start_server(bus_clone, cfg, control_clone).await;
+                }
+            });
+            (Some(bus), Some(play_rx))
+        })
+        .unwrap_or((None, None));
 
     #[cfg(feature = "web")]
     if let Some(addr) = &serve_addr {
-        println!("Visualizer ready. Open http://{} and press Play to start.", addr);
+        println!(
+            "Visualizer ready. Open http://{} and press Play to start.",
+            addr
+        );
     }
 
     let config = Arc::new(PipelineConfig {
@@ -90,16 +109,24 @@ async fn main() -> opencv::Result<()> {
     let mut frame = Mat::default();
     #[cfg(feature = "web")]
     let stream_enabled = serve_addr.is_some();
-    use tokio::time::{sleep, Duration};
-    let frame_delay = if fps > 0.0 { Duration::from_secs_f64(1.0 / fps.max(1.0)) } else { Duration::from_millis(33) };
+    use tokio::time::{Duration, sleep};
+    let frame_delay = if fps > 0.0 {
+        Duration::from_secs_f64(1.0 / fps.max(1.0))
+    } else {
+        Duration::from_millis(33)
+    };
     loop {
         // Wait for play command from UI
         #[cfg(feature = "web")]
         if let Some(rx) = &mut play_rx {
-            use tokio::time::{sleep, Duration};
-            while !*rx.borrow() { sleep(Duration::from_millis(50)).await; }
+            use tokio::time::{Duration, sleep};
+            while !*rx.borrow() {
+                sleep(Duration::from_millis(50)).await;
+            }
         }
-        if !cap.read(&mut frame)? || frame.empty() { break; }
+        if !cap.read(&mut frame)? || frame.empty() {
+            break;
+        }
 
         let mut pipeline = pipeline.lock().unwrap();
         let mut rgba_frame = Mat::default();
@@ -109,24 +136,75 @@ async fn main() -> opencv::Result<()> {
         let analysis = pipeline.process_frame(&frame_buffer);
 
         let mut output_frame = frame.clone();
-        let mut heatmap_overlay = Mat::new_size_with_default(frame.size().unwrap(), core::CV_8UC3, Scalar::all(0.0)).unwrap();
-        apply_dimming_and_heat(&mut output_frame, &mut heatmap_overlay, &analysis.status_map, frame_width, config.chunk_width, config.chunk_height);
-        draw_tracked_blobs(&mut output_frame, &analysis.tracked_blobs, config.chunk_width, config.chunk_height);
+        let mut heatmap_overlay =
+            Mat::new_size_with_default(frame.size().unwrap(), core::CV_8UC3, Scalar::all(0.0))
+                .unwrap();
+        apply_dimming_and_heat(
+            &mut output_frame,
+            &mut heatmap_overlay,
+            &analysis.status_map,
+            frame_width,
+            config.chunk_width,
+            config.chunk_height,
+        );
+        draw_tracked_blobs(
+            &mut output_frame,
+            &analysis.tracked_blobs,
+            config.chunk_width,
+            config.chunk_height,
+        );
         draw_header(&mut output_frame, frame_index, &analysis);
 
         let mut final_frame = Mat::default();
-        core::add_weighted(&output_frame, 1.0, &heatmap_overlay, 0.8, 0.0, &mut final_frame, -1).unwrap();
+        core::add_weighted(
+            &output_frame,
+            1.0,
+            &heatmap_overlay,
+            0.8,
+            0.0,
+            &mut final_frame,
+            -1,
+        )
+        .unwrap();
 
         #[cfg(feature = "web")]
         if stream_enabled {
             if let Some(bus) = &frame_bus {
                 let mut rgba_out = Mat::default();
-                imgproc::cvt_color(&final_frame, &mut rgba_out, imgproc::COLOR_BGR2RGBA, 0).unwrap();
+                imgproc::cvt_color(&final_frame, &mut rgba_out, imgproc::COLOR_BGR2RGBA, 0)
+                    .unwrap();
                 let bytes = rgba_out.data_bytes().unwrap().to_vec();
                 if let Some(pkt) = encode_jpeg(&bytes, frame_width, frame_height, 60) {
-                    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-                    let _ = bus.frames_tx.send(FramePacket { ts_millis: ts, width: frame_width, height: frame_height, format: FrameFormat::Jpeg, data: pkt.into() });
-                    let meta = Meta { scene_state: format!("{:?}", analysis.scene_state), event_count: analysis.significant_event_count, blobs: analysis.tracked_blobs.iter().map(|b| { let (tl, br) = b.latest_blob.bounding_box; MetaBlobSummary { id: b.id, x0: tl.x, y0: tl.y, x1: br.x, y1: br.y, state: format!("{:?}", b.state) } }).collect() };
+                    let ts = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64;
+                    let _ = bus.frames_tx.send(FramePacket {
+                        ts_millis: ts,
+                        width: frame_width,
+                        height: frame_height,
+                        format: FrameFormat::Jpeg,
+                        data: pkt.into(),
+                    });
+                    let meta = Meta {
+                        scene_state: format!("{:?}", analysis.scene_state),
+                        event_count: analysis.significant_event_count,
+                        blobs: analysis
+                            .tracked_blobs
+                            .iter()
+                            .map(|b| {
+                                let (tl, br) = b.latest_blob.bounding_box;
+                                MetaBlobSummary {
+                                    id: b.id,
+                                    x0: tl.x,
+                                    y0: tl.y,
+                                    x1: br.x,
+                                    y1: br.y,
+                                    state: format!("{:?}", b.state),
+                                }
+                            })
+                            .collect(),
+                    };
                     let _ = bus.meta_tx.send(meta);
                 }
             }
@@ -144,7 +222,7 @@ async fn main() -> opencv::Result<()> {
 
 #[cfg(feature = "web")]
 fn encode_jpeg(rgba_bytes: &[u8], width: u32, height: u32, quality: u8) -> Option<Vec<u8>> {
-    use image::{codecs::jpeg::JpegEncoder, ColorType, DynamicImage, ImageBuffer, Rgba};
+    use image::{ColorType, DynamicImage, ImageBuffer, Rgba, codecs::jpeg::JpegEncoder};
     // Wrap incoming RGBA buffer, then convert to RGB for JPEG encoding
     let rgba: ImageBuffer<Rgba<u8>, _> = ImageBuffer::from_raw(width, height, rgba_bytes.to_vec())?;
     let rgb = DynamicImage::ImageRgba8(rgba).to_rgb8();
