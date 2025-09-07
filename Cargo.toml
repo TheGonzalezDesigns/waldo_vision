@@ -2,4 +2,5 @@
 members = [
     "waldo_vision",
     "visual_tester",
+    "waldo_vision_visualizer",
 ]
