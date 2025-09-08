@@ -400,6 +400,7 @@ pub async fn start_server(
     use axum::response::Html;
     use axum::{response::IntoResponse as _, routing::post};
     use std::collections::HashMap;
+    use tokio::sync::mpsc;
     const INDEX_HTML: &str = r#"<!doctype html>
 <html lang=\"en\">
 <head>
@@ -465,12 +466,58 @@ pub async fn start_server(
     let bus_ws = bus.clone();
     let cfg_ws = cfg.clone();
     let control_ws = control.clone();
+    // Ingest channel: single-source ("pi"). Frames received here will be processed centrally.
+    let (ingest_tx, ingest_rx) = mpsc::channel::<Vec<u8>>(64);
+
+    // Spawn ingest worker: decode JPEG -> run VisionPipeline -> draw overlays -> publish to FrameBus.
+    tokio::spawn(ingest_worker(ingest_rx, bus.clone()));
+
     base = base
         .route("/ws/signaling", get(move |ws: WebSocketUpgrade| {
             let bus = bus_ws.clone();
             let cfg = cfg_ws.clone();
             let control = control_ws.clone();
             async move { ws_handler_with_bus(ws, bus, cfg, control) }
+        }))
+        .route("/ws/ingest/pi", get({
+            let ingest_tx = ingest_tx.clone();
+            move |ws: WebSocketUpgrade| async move {
+                ws.on_upgrade(move |mut socket| async move {
+                    use axum::extract::ws::Message;
+                    println!("ingest: WS connected (source=pi)");
+                    let mut saw_first = false;
+                    loop {
+                        match socket.recv().await {
+                            Some(Ok(Message::Binary(b))) => {
+                                if !saw_first { println!("ingest: first frame ({} bytes)", b.len()); saw_first = true; }
+                                if let Err(_e) = ingest_tx.send(b).await {
+                                    println!("ingest: channel closed while forwarding frame");
+                                    break;
+                                }
+                            }
+                            Some(Ok(Message::Text(t))) => {
+                                // Optional hello JSON; log and ignore
+                                let preview = if t.len() > 200 { format!("{}...", &t[..200]) } else { t };
+                                println!("ingest: text msg: {}", preview);
+                            }
+                            Some(Ok(Message::Close(cf))) => {
+                                if let Some(frame) = cf { println!("ingest: WS close code={} reason={}", frame.code, frame.reason); }
+                                else { println!("ingest: WS closed by peer"); }
+                                break;
+                            }
+                            Some(Ok(_other)) => { /* ping/pong ignored */ }
+                            Some(Err(e)) => {
+                                println!("ingest: WS error: {}", e);
+                                break;
+                            }
+                            None => {
+                                println!("ingest: WS disconnected");
+                                break;
+                            }
+                        }
+                    }
+                })
+            }
         }))
         .route("/stream.mjpeg", get({
             let bus_stream = bus.clone();
@@ -493,6 +540,7 @@ pub async fn start_server(
                     loop {
                         match rx.recv().await {
                             Ok(pkt) => {
+                                println!("mjpeg: streaming frame {} bytes ({}x{})", pkt.data.len(), pkt.width, pkt.height);
                                 let header = format!("--{}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", boundary, pkt.data.len());
                                 yield Ok::<Bytes, axum::Error>(Bytes::from(header));
                                 yield Ok::<Bytes, axum::Error>(Bytes::from(pkt.data.to_vec()));
@@ -553,4 +601,102 @@ pub async fn start_server(
     Err(anyhow::anyhow!(
         "web feature not enabled for waldo_vision_visualizer"
     ))
+}
+
+// Ingest worker: decode JPEG -> run waldo_vision pipeline centrally -> draw overlays -> publish to FrameBus
+#[cfg(feature = "web")]
+async fn ingest_worker(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>, bus: FrameBus) {
+    use image::{ColorType, DynamicImage};
+    use waldo_vision::pipeline::{VisionPipeline, PipelineConfig};
+
+    // Initialize when first frame arrives (dimensions unknown beforehand)
+    let mut pipeline: Option<(VisionPipeline, u32, u32, u32, u32)> = None; // (pipe, w, h, chunk_w, chunk_h)
+
+    while let Some(jpeg) = rx.recv().await {
+        if jpeg.is_empty() { println!("ingest_worker: received empty frame; skipping"); continue; }
+        let img = match image::load_from_memory(&jpeg) { Ok(i) => i, Err(e) => { println!("ingest_worker: JPEG decode error: {} ({} bytes)", e, jpeg.len()); continue } };
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        if pipeline.is_none() {
+            let cfg = PipelineConfig {
+                image_width: w,
+                image_height: h,
+                chunk_width: 10,
+                chunk_height: 10,
+                new_age_threshold: 5,
+                behavioral_anomaly_threshold: 3.0,
+                absolute_min_blob_size: 2,
+                blob_size_std_dev_filter: 2.0,
+                disturbance_entry_threshold: 0.25,
+                disturbance_exit_threshold: 0.15,
+                disturbance_confirmation_frames: 5,
+            };
+            println!("ingest_worker: initializing pipeline w={} h={} chunk={}x{}", w, h, cfg.chunk_width, cfg.chunk_height);
+            pipeline = Some((VisionPipeline::new(cfg.clone()), w, h, cfg.chunk_width, cfg.chunk_height));
+        }
+        let (pipe, _pw, _ph, chunk_w, chunk_h) = pipeline.as_mut().unwrap();
+        let analysis = pipe.process_frame(rgba.as_raw());
+        let overlaid = draw_overlays(rgba, &analysis, *chunk_w, *chunk_h);
+
+        // JPEG does not support alpha; convert to RGB before encoding
+        let rgb = DynamicImage::ImageRgba8(overlaid).to_rgb8();
+        let (w, h) = rgb.dimensions();
+        let mut out = Vec::new();
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 75);
+        match enc.encode(&rgb, w, h, ColorType::Rgb8.into()) {
+            Ok(_) => {
+                println!("ingest_worker: published {} bytes ({}x{})", out.len(), w, h);
+                let _ = bus.frames_tx.send(FramePacket{
+                    ts_millis: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+                    width: w,
+                    height: h,
+                    format: FrameFormat::Jpeg,
+                    data: out.into(),
+                });
+            }
+            Err(e) => {
+                println!("ingest_worker: JPEG encode error: {}", e);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "web")]
+fn draw_overlays(
+    mut rgba: image::RgbaImage,
+    analysis: &waldo_vision::pipeline::FrameAnalysis,
+    chunk_w: u32,
+    chunk_h: u32,
+) -> image::RgbaImage {
+    use waldo_vision::pipeline::TrackedState;
+    // Draw simple hollow rectangles for tracked blobs; do not change existing drawing styles beyond this minimal overlay
+    for tb in &analysis.tracked_blobs {
+        let (tl, br) = tb.latest_blob.bounding_box;
+        let mut x0 = (tl.x * chunk_w) as i32;
+        let mut y0 = (tl.y * chunk_h) as i32;
+        let mut x1 = ((br.x + 1) * chunk_w) as i32 - 1;
+        let mut y1 = ((br.y + 1) * chunk_h) as i32 - 1;
+        if x1 <= x0 || y1 <= y0 { continue; }
+        let (iw, ih) = rgba.dimensions();
+        x0 = x0.clamp(0, iw.saturating_sub(1) as i32);
+        y0 = y0.clamp(0, ih.saturating_sub(1) as i32);
+        x1 = x1.clamp(0, iw.saturating_sub(1) as i32);
+        y1 = y1.clamp(0, ih.saturating_sub(1) as i32);
+
+        let color = match tb.state {
+            TrackedState::New => image::Rgba([0, 255, 255, 255]),
+            TrackedState::Tracking => image::Rgba([255, 100, 0, 255]),
+            TrackedState::Lost => image::Rgba([128, 128, 128, 255]),
+            TrackedState::Anomalous => image::Rgba([0, 0, 255, 255]),
+        };
+        for x in x0..=x1 {
+            if y0 >= 0 { rgba.put_pixel(x as u32, y0 as u32, color); }
+            if y1 >= 0 { rgba.put_pixel(x as u32, y1 as u32, color); }
+        }
+        for y in y0..=y1 {
+            if x0 >= 0 { rgba.put_pixel(x0 as u32, y as u32, color); }
+            if x1 >= 0 { rgba.put_pixel(x1 as u32, y as u32, color); }
+        }
+    }
+    rgba
 }
