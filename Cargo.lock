@@ -3917,11 +3917,13 @@ dependencies = [
  "axum",
  "bytes",
  "futures-util",
+ "image",
  "leptos",
  "leptos_axum",
  "serde",
  "serde_json",
  "tokio",
+ "waldo_vision",
  "webrtc",
 ]
 

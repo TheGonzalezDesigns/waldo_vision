@@ -32,9 +32,14 @@ Options (for start/restart):
   -d <host>   Public domain for health check (default: ${DEFAULT_DOMAIN})
   -n <ip>     NAT public IP (default: auto-detect)
   -r <range>  ICE UDP port range, e.g. 30000-30100 (default: ${DEFAULT_ICE_RANGE})
+  --stream    Run server-only and accept WS ingest (default)
+  --local     Run local file pipeline (visual_tester) and publish
 
 Examples:
-  $0 start -v assets/Monroe_Walking.mp4 -o /tmp/out.mp4 -b 127.0.0.1:3001
+  # Stream mode (server only, for Pi ingest)
+  $0 start --stream -b 127.0.0.1:3001
+  # Local mode (use local asset via visual_tester)
+  $0 start --local -v assets/Monroe_Walking.mp4 -o /tmp/out.mp4 -b 127.0.0.1:3001
   $0 logs
 USAGE
 }
@@ -61,10 +66,7 @@ is_running() {
 }
 
 start_server() {
-  local video="${1}" output="${2}" bind_addr="${3}" domain="${4}" nat_ip="${5}" ice_range="${6}"
-
-  echo "[waldo] Building visual_tester (release, web feature)…"
-  cargo build -q -p visual_tester --features web --release
+  local video="${1}" output="${2}" bind_addr="${3}" domain="${4}" nat_ip="${5}" ice_range="${6}" mode="${7}"
 
   echo "[waldo] Stopping any existing instance…"
   $0 stop || true
@@ -76,12 +78,26 @@ start_server() {
   : "${nat_ip:=unset}"
   : "${ice_range:=${DEFAULT_ICE_RANGE}}"
 
-  echo "[waldo] Starting server: bind=${bind_addr}, NAT_IP=${nat_ip}, ICE_RANGE=${ice_range}"
-  (
-    export WV_NAT_IP="${nat_ip}"
-    export WV_ICE_PORT_RANGE="${ice_range}"
-    exec target/release/visual_tester --serve "${bind_addr}" "${video}" "${output}"
-  ) >"${LOG_FILE}" 2>&1 &
+  if [[ "${mode}" == "local" ]]; then
+    echo "[waldo] Building visual_tester (release, web feature)…"
+    cargo build -q -p visual_tester --features web --release
+    echo "[waldo] Starting LOCAL pipeline: bind=${bind_addr}, NAT_IP=${nat_ip}, ICE_RANGE=${ice_range}"
+    (
+      export WV_NAT_IP="${nat_ip}"
+      export WV_ICE_PORT_RANGE="${ice_range}"
+      exec target/release/visual_tester --serve "${bind_addr}" "${video}" "${output}"
+    ) >"${LOG_FILE}" 2>&1 &
+  else
+    echo "[waldo] Building standalone visualizer (release, web feature)…"
+    cargo build -q -p waldo_vision_visualizer --features web --bin standalone --release
+    echo "[waldo] Starting STREAM server-only: bind=${bind_addr}, NAT_IP=${nat_ip}, ICE_RANGE=${ice_range}"
+    (
+      export WV_NAT_IP="${nat_ip}"
+      export WV_ICE_PORT_RANGE="${ice_range}"
+      export WV_BIND="${bind_addr}"
+      exec target/release/standalone
+    ) >"${LOG_FILE}" 2>&1 &
+  fi
 
   echo $! > "${PID_FILE}"
   sleep 1
@@ -149,6 +165,18 @@ shift || true
 case "${cmd}" in
   start)
     VIDEO="${DEFAULT_VIDEO}"; OUTPUT="${DEFAULT_OUTPUT}"; BIND="${DEFAULT_BIND}"; DOMAIN="${DEFAULT_DOMAIN}"; NAT_IP="auto"; ICE_RANGE="${DEFAULT_ICE_RANGE}"
+    MODE="stream" # default
+    # Prefilter long flags so getopts doesn't choke on them
+    ARGS=()
+    for a in "$@"; do
+      case "$a" in
+        --local) MODE="local" ;;
+        --stream) MODE="stream" ;;
+        *) ARGS+=("$a") ;;
+      esac
+    done
+    set -- "${ARGS[@]}"
+    OPTIND=1
     while getopts ":v:o:b:d:n:r:" opt; do
       case $opt in
         v) VIDEO="$OPTARG" ;;
@@ -160,7 +188,8 @@ case "${cmd}" in
         *) usage; exit 1 ;;
       esac
     done
-    start_server "${VIDEO}" "${OUTPUT}" "${BIND}" "${DOMAIN}" "${NAT_IP}" "${ICE_RANGE}"
+    shift $((OPTIND-1)) || true
+    start_server "${VIDEO}" "${OUTPUT}" "${BIND}" "${DOMAIN}" "${NAT_IP}" "${ICE_RANGE}" "${MODE}"
     ;;
   stop)
     stop_server
@@ -180,4 +209,3 @@ case "${cmd}" in
     usage
     ;;
 esac
-
