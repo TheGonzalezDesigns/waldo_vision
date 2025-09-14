@@ -125,21 +125,17 @@ impl TrackedBlob {
         }
         
         update_history(&mut self.size_history, self.latest_blob.size_in_chunks);
-        
-        // Update hue statistics incrementally
-        let new_hue = self.latest_blob.average_anomaly.hue_score;
-        if self.signature_history.len() >= HISTORY_SIZE {
-            let old_hue = self.signature_history.front().unwrap().hue_score;
-            self.hue_sum -= old_hue;
-            self.hue_sum_sq -= old_hue * old_hue;
-        }
-        self.hue_sum += new_hue;
-        self.hue_sum_sq += new_hue * new_hue;
-        update_history(&mut self.signature_history, self.latest_blob.average_anomaly.clone());
+        update_history(
+            &mut self.signature_history,
+            self.latest_blob.average_anomaly.clone(),
+        );
 
         if self.position_history.len() > 1 {
             let new_pos = self.position_history.back().unwrap();
-            let old_pos = self.position_history.get(self.position_history.len() - 2).unwrap();
+            let old_pos = self
+                .position_history
+                .get(self.position_history.len() - 2)
+                .unwrap();
             self.velocity = (new_pos.0 - old_pos.0, new_pos.1 - old_pos.1);
             
             // Update velocity statistics incrementally
@@ -157,10 +153,13 @@ impl TrackedBlob {
             update_history(&mut self.velocity_history, self.velocity);
         }
     }
-    
+
     fn predict_next_position(&self) -> (f64, f64) {
         let current_pos = self.latest_blob.center_of_mass;
-        (current_pos.0 + self.velocity.0, current_pos.1 + self.velocity.1)
+        (
+            current_pos.0 + self.velocity.0,
+            current_pos.1 + self.velocity.1,
+        )
     }
 }
 
@@ -184,7 +183,11 @@ impl Tracker {
         }
     }
 
-    pub fn update(&mut self, new_blobs: Vec<SmartBlob>, config: &PipelineConfig) -> &Vec<TrackedBlob> {
+    pub fn update(
+        &mut self,
+        new_blobs: Vec<SmartBlob>,
+        config: &PipelineConfig,
+    ) -> &Vec<TrackedBlob> {
         let coherent_blobs = self.merge_fragmented_blobs(new_blobs);
         let (matches, unmatched_blobs_map) = self.match_blobs(coherent_blobs);
         let mut unmatched_blobs = unmatched_blobs_map;
@@ -227,7 +230,10 @@ impl Tracker {
         blobs // Placeholder for future enhancement
     }
 
-    fn match_blobs(&self, blobs: Vec<SmartBlob>) -> (Vec<(usize, usize)>, HashMap<usize, SmartBlob>) {
+    fn match_blobs(
+        &self,
+        blobs: Vec<SmartBlob>,
+    ) -> (Vec<(usize, usize)>, HashMap<usize, SmartBlob>) {
         let mut matches = Vec::new();
         let mut unmatched_blobs: HashMap<usize, SmartBlob> = blobs.into_iter().enumerate().collect();
         let mut used_blob_indices = HashSet::new();
@@ -251,25 +257,17 @@ impl Tracker {
             let grid_y = (predicted_pos.1 / GRID_SIZE) as i32;
             
             let mut best_match: Option<(usize, f64)> = None;
-            
-            // Only check neighboring grid cells (3x3 area)
-            for dx in -1..=1 {
-                for dy in -1..=1 {
-                    if let Some(blob_indices) = spatial_grid.get(&(grid_x + dx, grid_y + dy)) {
-                        for &j in blob_indices {
-                            if used_blob_indices.contains(&j) { continue; }
-                            
-                            let new_blob = &unmatched_blobs[&j];
-                            let dist_sq = (predicted_pos.0 - new_blob.center_of_mass.0).powi(2) + 
-                                         (predicted_pos.1 - new_blob.center_of_mass.1).powi(2);
-                            let dist = dist_sq.sqrt();
-                            
-                            if dist < DISTANCE_THRESHOLD {
-                                if best_match.is_none() || dist < best_match.as_ref().unwrap().1 {
-                                    best_match = Some((j, dist));
-                                }
-                            }
-                        }
+
+            for (j, new_blob) in &unmatched_blobs {
+                if used_blob_indices.contains(j) {
+                    continue;
+                }
+                let dist_sq = (predicted_pos.0 - new_blob.center_of_mass.0).powi(2)
+                    + (predicted_pos.1 - new_blob.center_of_mass.1).powi(2);
+                let dist = dist_sq.sqrt();
+                if dist < DISTANCE_THRESHOLD {
+                    if best_match.is_none() || dist < best_match.as_ref().unwrap().1 {
+                        best_match = Some((*j, dist));
                     }
                 }
             }
@@ -307,44 +305,52 @@ impl Tracker {
 // --- Behavioral Anomaly Detection Helpers ---
 
 fn is_acceleration_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
-    if blob.velocity_history.len() < HISTORY_SIZE / 2 { return false; }
-    
-    let n = blob.velocity_history.len() as f64;
-    let mean_vx = blob.velocity_x_sum / n;
-    let mean_vy = blob.velocity_y_sum / n;
-    let variance_vx = (blob.velocity_x_sum_sq / n) - (mean_vx * mean_vx);
-    let variance_vy = (blob.velocity_y_sum_sq / n) - (mean_vy * mean_vy);
-    let std_dev_vx = variance_vx.sqrt();
-    let std_dev_vy = variance_vy.sqrt();
-    
+    if blob.velocity_history.len() < HISTORY_SIZE / 2 {
+        return false;
+    }
+    let (mean_vx, std_dev_vx) = calculate_vector_stats(&blob.velocity_history, |v| v.0);
+    let (mean_vy, std_dev_vy) = calculate_vector_stats(&blob.velocity_history, |v| v.1);
+
     let z_score_x = (blob.velocity.0 - mean_vx) / std_dev_vx.max(0.01);
     let z_score_y = (blob.velocity.1 - mean_vy) / std_dev_vy.max(0.01);
 
-    z_score_x.abs() > config.behavioral_anomaly_threshold || z_score_y.abs() > config.behavioral_anomaly_threshold
+    z_score_x.abs() > config.behavioral_anomaly_threshold
+        || z_score_y.abs() > config.behavioral_anomaly_threshold
 }
 
 fn is_size_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
-    if blob.size_change_history.len() < HISTORY_SIZE / 2 { return false; }
-    
-    let n = blob.size_change_history.len() as f64;
-    let mean = blob.size_change_sum / n;
-    let variance = (blob.size_change_sum_sq / n) - (mean * mean);
-    let std_dev = variance.sqrt();
-    let current_change = *blob.size_change_history.back().unwrap();
+    if blob.size_history.len() < HISTORY_SIZE / 2 {
+        return false;
+    }
+    let size_changes: Vec<f64> = blob
+        .size_history
+        .as_slices()
+        .0
+        .windows(2)
+        .map(|w| (w[1] as f64 - w[0] as f64))
+        .collect();
+    if size_changes.is_empty() {
+        return false;
+    }
 
-    (current_change - mean) / std_dev.max(0.01) > config.behavioral_anomaly_threshold
+    let (mean, std_dev) = calculate_scalar_stats(&size_changes);
+    // Compute signed difference to avoid usize underflow when size decreases.
+    let last = *blob.size_history.back().unwrap() as f64;
+    let prev = *blob.size_history.get(blob.size_history.len() - 2).unwrap() as f64;
+    let current_change = last - prev;
+
+    ((current_change - mean) / std_dev.max(0.01)).abs() > config.behavioral_anomaly_threshold
 }
 
 fn is_hue_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
-    if blob.signature_history.len() < HISTORY_SIZE / 2 { return false; }
-    
-    let n = blob.signature_history.len() as f64;
-    let mean = blob.hue_sum / n;
-    let variance = (blob.hue_sum_sq / n) - (mean * mean);
-    let std_dev = variance.sqrt();
+    if blob.signature_history.len() < HISTORY_SIZE / 2 {
+        return false;
+    }
+    let hue_scores: Vec<f64> = blob.signature_history.iter().map(|s| s.hue_score).collect();
+    let (mean, std_dev) = calculate_scalar_stats(&hue_scores);
     let current_hue = blob.latest_blob.average_anomaly.hue_score;
 
-    (current_hue - mean) / std_dev.max(0.01) > config.behavioral_anomaly_threshold
+    ((current_hue - mean) / std_dev.max(0.01)).abs() > config.behavioral_anomaly_threshold
 }
 
 fn calculate_scalar_stats(data: &[f64]) -> (f64, f64) {
@@ -355,7 +361,9 @@ fn calculate_scalar_stats(data: &[f64]) -> (f64, f64) {
 }
 
 fn calculate_vector_stats<F>(data: &VecDeque<(f64, f64)>, accessor: F) -> (f64, f64)
-where F: Fn(&(f64, f64)) -> f64 {
+where
+    F: Fn(&(f64, f64)) -> f64,
+{
     let values: Vec<f64> = data.iter().map(accessor).collect();
     calculate_scalar_stats(&values)
 }

@@ -22,9 +22,7 @@
 
 use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::pixel::pixel::Pixel;
-use crate::core_modules::smart_pixel::smart_pixel::{
-    HueDifference, LuminanceDelta, SmartPixel,
-};
+use crate::core_modules::smart_pixel::smart_pixel::{HueDifference, LuminanceDelta, SmartPixel};
 use std::collections::VecDeque;
 
 const HISTORY_WINDOW_SIZE: usize = 20;

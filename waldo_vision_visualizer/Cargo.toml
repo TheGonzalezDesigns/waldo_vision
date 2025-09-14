@@ -1,0 +1,34 @@
+[package]
+name = "waldo_vision_visualizer"
+version = "0.1.0"
+edition = "2024"
+description = "Waldo Vision visualizer web server and streaming interfaces"
+
+[features]
+default = []
+web = [
+    "dep:axum",
+    "dep:leptos",
+    "dep:leptos_axum",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:webrtc",
+    "dep:bytes",
+    "dep:futures-util",
+    "dep:async-stream",
+]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+axum = { version = "0.7", features = ["ws"], optional = true }
+leptos = { version = "0.6", default-features = false, features = ["ssr"], optional = true }
+leptos_axum = { version = "0.6", optional = true }
+webrtc = { version = "0.10", optional = true }
+anyhow = { version = "1" }
+bytes = { version = "1", optional = true }
+futures-util = { version = "0.3", optional = true }
+async-stream = { version = "0.3", optional = true }
+image = { version = "0.25" }
+waldo_vision = { path = "../waldo_vision" }

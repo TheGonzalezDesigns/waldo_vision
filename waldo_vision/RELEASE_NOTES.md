@@ -4,16 +4,20 @@
 
 **Release Date**: 2025-09-01
 
-This release focuses on refining the core engine, improving the stability of the pipeline, and providing a more flexible and configurable API.
+This release focuses on refining the core engine, improving stability, and clarifying the public API.
 
 ---
 
 ### Key Features & Capabilities
 
-*   **Configurable Significance API**: The `significance_recipe` in `PipelineConfig` allows for more granular control over what is considered a "significant event".
-*   **Scene Stability State Machine**: A new state machine (`SceneState`) has been implemented to analyze the stability of the scene. This helps to reduce false positives by tracking whether the scene is `Stable`, `Volatile`, or in a state of global `Disturbance`.
-*   **Hysteresis for Scene State**: The state machine uses hysteresis (separate entry and exit thresholds) to prevent rapid flickering between states, making the overall analysis more robust.
-*   **API Finalization**: The public API has been finalized and stabilized for this release, providing a solid foundation for future development.
+*   **Scene Stability State Machine**: Introduces `SceneState` (`Calibrating`, `Stable`, `Volatile`, `Disturbed`) with hysteresis to reduce false positives by modeling global scene stability.
+*   **Pipeline Tunables**: Expanded `PipelineConfig` with practical thresholds used end‑to‑end:
+    * `new_age_threshold`, `behavioral_anomaly_threshold` (tracker behavior).
+    * `absolute_min_blob_size`, `blob_size_std_dev_filter` (blob filtering).
+    * `disturbance_entry_threshold`, `disturbance_exit_threshold`, `disturbance_confirmation_frames` (scene state).
+*   **Public API Clarification**: The main entrypoint is `VisionPipeline::process_frame(&[u8]) -> FrameAnalysis`.
+    * `FrameAnalysis.report` is a `Report` enum: `NoSignificantMention` or `SignificantMention(MentionData)`.
+    * Also exposes `status_map`, `tracked_blobs`, `scene_state`, and `significant_event_count` for visualization and diagnostics.
 
 ---
 

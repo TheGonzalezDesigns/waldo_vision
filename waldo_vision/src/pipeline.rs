@@ -121,22 +121,21 @@ impl VisionPipeline {
         
         let filter_start = std::time::Instant::now();
         let filtered_blobs = self.filter_blobs(raw_blobs);
-        let filter_time = filter_start.elapsed();
+        let (newly_started, newly_completed) =
+            self.scene_manager.update(filtered_blobs, &self.config);
 
-        let tracking_start = std::time::Instant::now();
-        let (newly_started, newly_completed) = self.scene_manager.update(filtered_blobs, &self.config);
-        let tracking_time = tracking_start.elapsed();
-        
-        if frame_buffer.len() > 0 && frame_buffer.len() % 1000000 == 0 {
-            println!("  Grid={}μs | Scene={}μs | Blob={}μs | Filter={}μs | Track={}μs", 
-                grid_time.as_micros(), scene_time.as_micros(), blob_time.as_micros(), 
-                filter_time.as_micros(), tracking_time.as_micros());
-        }
+        let new_significant_moments: Vec<Moment> = newly_started
+            .into_iter()
+            .filter(|m| m.is_significant)
+            .collect();
+        let completed_significant_moments: Vec<Moment> = newly_completed
+            .into_iter()
+            .filter(|m| m.is_significant)
+            .collect();
 
-        let new_significant_moments: Vec<Moment> = newly_started.into_iter().filter(|m| m.is_significant).collect();
-        let completed_significant_moments: Vec<Moment> = newly_completed.into_iter().filter(|m| m.is_significant).collect();
-
-        let is_significant_frame = !new_significant_moments.is_empty() || !completed_significant_moments.is_empty() || self.scene_state == SceneState::Disturbed;
+        let is_significant_frame = !new_significant_moments.is_empty()
+            || !completed_significant_moments.is_empty()
+            || self.scene_state == SceneState::Disturbed;
         if is_significant_frame {
             self.significant_event_count += 1;
         }
@@ -162,31 +161,34 @@ impl VisionPipeline {
 
     fn filter_blobs(&mut self, blobs: Vec<SmartBlob>) -> Vec<SmartBlob> {
         let (mean, std_dev) = {
-            if self.blob_size_history.is_empty() { 
-                (0.0, 0.0) 
+            if self.blob_size_history.is_empty() {
+                (0.0, 0.0)
             } else {
-                let n = self.blob_size_history.len() as f64;
-                let mean = self.blob_size_sum as f64 / n;
-                let variance = (self.blob_size_sum_sq as f64 / n) - (mean * mean);
+                let sum: usize = self.blob_size_history.iter().sum();
+                let mean = sum as f64 / self.blob_size_history.len() as f64;
+                let variance = self
+                    .blob_size_history
+                    .iter()
+                    .map(|value| (*value as f64 - mean).powi(2))
+                    .sum::<f64>()
+                    / self.blob_size_history.len() as f64;
                 (mean, variance.sqrt())
             }
         };
 
-        let filtered_blobs: Vec<SmartBlob> = blobs
-            .into_iter()
-            .filter(|blob| {
-                if blob.size_in_chunks < self.config.absolute_min_blob_size { 
-                    return false;
+        let mut filtered_blobs = Vec::new();
+        for blob in blobs {
+            if blob.size_in_chunks < self.config.absolute_min_blob_size {
+                continue;
+            }
+            if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH / 2 {
+                let threshold = mean - self.config.blob_size_std_dev_filter * std_dev;
+                if (blob.size_in_chunks as f64) < threshold {
+                    continue;
                 }
-                if self.blob_size_history.len() >= BLOB_SIZE_HISTORY_LENGTH / 2 {
-                    let threshold = mean - self.config.blob_size_std_dev_filter * std_dev;
-                    if (blob.size_in_chunks as f64) < threshold { 
-                        return false;
-                    }
-                }
-                true
-            })
-            .collect();
+            }
+            filtered_blobs.push(blob);
+        }
 
         for blob in &filtered_blobs {
             let size = blob.size_in_chunks;
@@ -206,9 +208,14 @@ impl VisionPipeline {
 
     fn analyze_scene_stability(&mut self, status_map: &[ChunkStatus]) {
         let num_chunks = status_map.len();
-        if num_chunks == 0 { return; }
+        if num_chunks == 0 {
+            return;
+        }
 
-        let num_unstable_chunks = status_map.iter().filter(|s| !matches!(s, ChunkStatus::Stable)).count();
+        let num_unstable_chunks = status_map
+            .iter()
+            .filter(|s| !matches!(s, ChunkStatus::Stable))
+            .count();
         let current_instability = num_unstable_chunks as f64 / num_chunks as f64;
 
         self.frames_in_current_state += 1;
