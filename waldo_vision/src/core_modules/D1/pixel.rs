@@ -720,6 +720,12 @@ pub mod pixel {
 //   linear RGB when doing “geometric” color math, converting to XYZ/Lab* when needed,
 //   and comparing colors with perceptual metrics like ΔE (pairwise, higher‑dimension).
 //
+// - LUT (Lookup Table): A precomputed array used to replace repeated runtime
+//   computation with a fast indexed lookup. Here, a 256‑entry sRGB→linear table
+//   converts each 8‑bit channel (0..255) to its linear‑RGB value in 0..1. The table
+//   is initialized once (thread‑safe via OnceLock), then reused, turning expensive
+//   powf(2.4) evaluations into constant‑time memory reads. Typical cost: ~1 KB RAM.
+//
 // - ComputedChannel: The 0..255 channel stored in floating precision.
 //
 // - NormalizedChannel (sRGB): Channel scaled to 0..1 but still gamma-encoded. Great
