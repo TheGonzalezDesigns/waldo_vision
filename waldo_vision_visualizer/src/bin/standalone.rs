@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
     let (play_tx, mut _play_rx) = tokio::sync::watch::channel(false);
     let control = ControlHandle { play_tx };
 
-    let handle = start_server(bus, cfg, control).await?;
+    let handle = start_server(bus, cfg).await?;
     // Park forever
     handle.await.ok();
     Ok(())
