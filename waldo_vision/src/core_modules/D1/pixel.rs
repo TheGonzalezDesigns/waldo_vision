@@ -62,6 +62,9 @@ pub mod pixel {
 
     const CHANNELS: usize = 4;
 
+    // Fast path: 256-entry LUT for sRGB (0..255) -> linear normalized (0..1)
+    static SRGB_TO_LINEAR_LUT: OnceLock<[NormalizedChannel; 256]> = OnceLock::new();
+
     /// A "dumb" data container representing a single RGBA pixel.
     #[derive(Debug, Clone, PartialEq)]
     pub struct Pixel {
@@ -100,6 +103,7 @@ pub mod pixel {
 
     impl Default for Pixel {
         fn default() -> Self {
+            // Zero-cost default: no derived computations, just zeros.
             Pixel {
                 red: Channel::default(),
                 green: Channel::default(),
@@ -141,8 +145,7 @@ pub mod pixel {
             }
         }
 
-        // Fast path: 256-entry LUT for sRGB (0..255) -> linear normalized (0..1)
-        static SRGB_TO_LINEAR_LUT: OnceLock<[NormalizedChannel; 256]> = OnceLock::new();
+        // Fast path LUT is defined at module scope to avoid associated `static`.
 
         #[inline]
         fn srgb_to_linear_normalized_from_byte(srgb_value: Byte) -> NormalizedChannel {
