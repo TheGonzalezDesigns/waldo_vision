@@ -19,8 +19,8 @@
 //
 // Heuristic families (all single‑pixel):
 // - Brightness:   luminance (Rec. 601), sum, HSV value (max), HSL lightness (midpoint)
-// - Color strength: chroma (max−min), saturation_HSV (chroma/value),
-//                   saturation_HSL (chroma / (1−|2L−1|)), colorfulness ≈ chroma,
+// - Color strength: chroma (max−min), saturation_hsv (chroma/value),
+//                   saturation_hsv (chroma / (1−|2L−1|)), colorfulness ≈ chroma,
 //                   achromaticity (inverse of saturation relative to value)
 // - Hue:          angle on the color wheel in degrees [0, 360)
 // - Spread:       channel standard deviation across R,G,B
@@ -178,24 +178,6 @@ pub mod pixel {
             0.299_f64 * self.red_computed as f64
                 + 0.587_f64 * self.green_computed as f64
                 + 0.114_f64 * self.blue_computed as f64
-        }
-
-        /// Backward-compatible alias for HSL lightness.
-        /// Delegates to feature-selected `lightness_hsl()` (optimal default, accurate with feature).
-        pub fn lightness_HSL(&self) -> LightnessHSL {
-            self.lightness_hsl()
-        }
-
-        /// Backward-compatible alias for HSL saturation.
-        /// Delegates to feature-selected `saturation_hsl()` (optimal default, accurate with feature).
-        pub fn saturation_HSL(&self) -> SaturationHSL {
-            self.saturation_hsl()
-        }
-
-        /// Backward-compatible alias for HSV saturation.
-        /// Delegates to feature-selected `saturation_hsv()` (optimal default, accurate with feature).
-        pub fn saturation_HSV(&self) -> SaturationHSV {
-            self.saturation_hsv()
         }
 
         /// Hue angle in degrees [0, 360) — optimal (fast) variant.
