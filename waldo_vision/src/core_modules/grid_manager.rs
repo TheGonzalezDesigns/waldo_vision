@@ -23,8 +23,8 @@
 //     it a new frame and receiving a status map, without needing to know the
 //     complex inner workings of the `SmartChunk`s.
 
-use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::D1::pixel::pixel::Pixel;
+use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::smart_chunk::{ChunkStatus, SmartChunk};
 
 /// Manages the entire grid of `SmartChunk`s and orchestrates the temporal analysis layer.
