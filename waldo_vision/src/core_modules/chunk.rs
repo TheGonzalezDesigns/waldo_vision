@@ -20,7 +20,7 @@
 // has changed significantly over time.
 
 pub mod chunk {
-    use crate::core_modules::pixel::pixel::Pixel;
+    use crate::core_modules::D1::pixel::pixel::{Pixel, Channel};
 
     /// A "dumb" data container representing a rectangular block of pixels.
     pub struct Chunk {
@@ -64,12 +64,12 @@ pub mod chunk {
                 sum_a += pixel.alpha as u32;
             }
 
-            Pixel {
-                red: (sum_r / num_pixels as u32) as u8,
-                green: (sum_g / num_pixels as u32) as u8,
-                blue: (sum_b / num_pixels as u32) as u8,
-                alpha: (sum_a / num_pixels as u32) as u8,
-            }
+            let red = (sum_r / num_pixels as u32) as Channel;
+            let green = (sum_g / num_pixels as u32) as Channel;
+            let blue = (sum_b / num_pixels as u32) as Channel;
+            let alpha = (sum_a / num_pixels as u32) as Channel;
+
+            Pixel::new(red, green, blue, alpha)
         }
     }
 }
