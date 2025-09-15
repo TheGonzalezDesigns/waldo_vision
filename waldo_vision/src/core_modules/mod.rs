@@ -1,3 +1,6 @@
+pub mod D1;
+pub mod D2;
+pub mod D3;
 pub mod blob_detector;
 pub mod chunk;
 pub mod grid_manager;
@@ -7,6 +10,3 @@ pub mod smart_chunk;
 pub mod smart_pixel;
 pub mod tracker;
 pub mod utils;
-pub mod D1;
-pub mod D2;
-pub mod D3;
