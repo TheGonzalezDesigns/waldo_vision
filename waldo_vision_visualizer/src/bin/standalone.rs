@@ -1,4 +1,4 @@
-use waldo_vision_visualizer::{start_server, ControlHandle, FrameBus, ServerConfig};
+use waldo_vision_visualizer::{ControlHandle, FrameBus, ServerConfig, start_server};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -20,4 +20,3 @@ async fn main() -> anyhow::Result<()> {
     handle.await.ok();
     Ok(())
 }
-
