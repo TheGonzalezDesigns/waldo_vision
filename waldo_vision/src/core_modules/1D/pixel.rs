@@ -617,3 +617,56 @@ pub mod pixel {
         }
     }
 }
+
+// -----------------------------------------------------------------------------
+// Glossary: Single-Pixel Color Terms (1D)
+//
+// - Luminance: Perceived brightness from RGB. Here we use a Rec. 601 luma
+//   approximation (weighted sum of R,G,B). Useful for thresholding and motion maps.
+//
+// - Hue: Angle on the color wheel (0°–360°) describing the “color family”
+//   (red, green, blue, etc.). Computed from relative differences between channels.
+//
+// - Value (HSV): Brightness defined as the maximum of the RGB channels. High Value
+//   means the pixel is bright regardless of colorfulness.
+//
+// - Lightness (HSL): Midpoint of the maximum and minimum channels. More balanced
+//   across shadows and highlights than HSV Value.
+//
+// - Chroma: Color purity = max(R,G,B) − min(R,G,B). Zero means perfectly gray; higher
+//   values are more vivid.
+//
+// - Saturation (HSV): Chroma divided by Value. Drops to zero near black, even if hue
+//   is well-defined.
+//
+// - Saturation (HSL): Chroma divided by (1 − |2L − 1|), where L is HSL Lightness.
+//   More consistent across dark and bright regions than HSV saturation.
+//
+// - Colorfulness: A simple proxy for “how vivid” a color is. Here we approximate it by
+//   chroma. Higher means further from gray at a given brightness.
+//
+// - Achromaticity: Inverse of saturation relative to Value. 1.0 means fully gray; 0.0
+//   means maximally saturated at that brightness.
+//
+// - Chromaticity (CIE x,y): Color defined by its proportion of X,Y,Z (with a D65 white
+//   point). Independent of overall brightness (Y acts like luminance). Often used as a
+//   stepping stone to estimates like correlated color temperature (with caveats).
+//
+// - Computed Channel: The 0..255 channel stored as f32 (fast arithmetic in native scale).
+//
+// - Normalized Channel (sRGB): Channel scaled to 0..1 but still gamma-encoded. Great
+//   for quick ratios and bounded math, not strictly “linear” to light.
+//
+// - Linearized Channel: Gamma-decoded channel proportional to light intensity. Accurate
+//   for colorimetry. We use a 256-entry sRGB→linear lookup table for speed.
+//
+// - Channel Standard Deviation: Spread of R,G,B around their mean. Zero for pure grays;
+//   larger for colorful pixels.
+//
+// - Optimal vs Accurate:
+//   • Optimal (default): fastest, uses normalized sRGB; good for realtime heuristics.
+//   • Accurate (feature `accurate`): uses linear RGB via LUT for color-correct math.
+//
+// Note: All items here are 1D (single pixel, no neighbors/time). Multi-pixel or temporal
+// heuristics (e.g., contrast vs neighbors, motion, ΔE between pixels) live in higher
+// dimension modules like SmartPixel (pairwise) or 2D/3D.
