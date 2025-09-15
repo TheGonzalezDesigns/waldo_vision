@@ -20,7 +20,7 @@
 // has changed significantly over time.
 
 pub mod chunk {
-    use crate::core_modules::D1::pixel::pixel::{Pixel, Channel};
+    use crate::core_modules::D1::pixel::pixel::{Channel, Pixel};
 
     /// A "dumb" data container representing a rectangular block of pixels.
     pub struct Chunk {
