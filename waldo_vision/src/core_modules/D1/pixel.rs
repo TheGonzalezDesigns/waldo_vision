@@ -187,9 +187,16 @@ pub mod pixel {
 
         /// Hue angle in degrees [0, 360) — optimal (fast) variant.
         ///
-        /// - Uses normalized sRGB channels (`self.*_normalized`), no linearization.
-        /// - Fastest path for heuristics, slight bias vs true linear RGB.
-        /// - Good for coarse color bucketing or real-time pipelines.
+        /// Represents:
+        /// - The color “family” (red, green, blue, etc.) as an angle on a color wheel.
+        ///
+        /// Use/interpretation:
+        /// - Fastest for real-time bucketing and coarse color filters.
+        /// - Slight bias vs true linear RGB because it uses sRGB-normalized channels.
+        /// - Wraps to [0, 360); values near 0 and 360 represent similar hues (reds).
+        ///
+        /// Implementation detail:
+        /// - Uses normalized sRGB (`self.*_normalized`), no linearization.
         pub fn hue_optimal(&self) -> Hue {
             let maximum_channel = self
                 .red_normalized
@@ -220,10 +227,17 @@ pub mod pixel {
             hue_degrees
         }
 
-        /// Hue angle in degrees [0, 360) — accurate (colorimetrically correct) variant.
+        /// Hue angle in degrees [0, 360) — accurate (linear RGB) variant.
         ///
-        /// - Uses LUT-linearized normalized channels (sRGB → linear) for correctness.
-        /// - Prefer this when color fidelity matters (analytics, feature extraction).
+        /// Represents:
+        /// - Same as `hue_optimal`, but computed in linear RGB for color correctness.
+        ///
+        /// Use/interpretation:
+        /// - Prefer for analytics, signatures, and perceptual comparisons.
+        /// - More stable near neutral colors and across brightness changes.
+        ///
+        /// Implementation detail:
+        /// - Uses precomputed linear channels (`self.red_linear`, etc.).
         pub fn hue_accurate(&self) -> Hue {
             let maximum_channel = self.red_linear.max(self.green_linear.max(self.blue_linear));
             let minimum_channel = self.red_linear.min(self.green_linear.min(self.blue_linear));
@@ -266,12 +280,30 @@ pub mod pixel {
         /// =================================Heuristics==================================
 
         /// Fast brightness proxy: sum of computed RGB channels (0..255 scale each).
-        /// - Avoids repeated casting by using precomputed `ComputedChannel` fields.
+        ///
+        /// Represents:
+        /// - Crude brightness estimate (not perceptual).
+        ///
+        /// Use/interpretation:
+        /// - Lightweight thresholding, quick deltas for motion heuristics.
+        /// - Not gamma-aware; use `luminance()` for perceptual brightness.
+        ///
+        /// Implementation detail:
+        /// - Avoids casts by using `ComputedChannel` fields.
         pub fn sum(&self) -> Sum {
             self.red_computed + self.green_computed + self.blue_computed
         }
 
         /// Per-channel contribution ratios (R, G, B) that sum to 1.0.
+        ///
+        /// Represents:
+        /// - Relative contributions of R, G, B to the pixel’s color.
+        ///
+        /// Use/interpretation:
+        /// - Simple, brightness-invariant color descriptor.
+        /// - Useful for hue-like distance or clustering in RGB space.
+        ///
+        /// Implementation detail:
         /// - Uses `ComputedChannel` values to avoid extra casts.
         pub fn color_ratios(&self) -> ColorRatios {
             let sum = self.sum();
@@ -286,6 +318,14 @@ pub mod pixel {
         }
 
         /// HSV Value (V): brightness defined as max(R, G, B).
+        ///
+        /// Represents:
+        /// - Brightness in HSV; not perceptually uniform.
+        ///
+        /// Use/interpretation:
+        /// - Quick brightness gating; combine with saturation for vividness.
+        ///
+        /// Implementation detail:
         /// - Optimal: uses normalized sRGB; fastest.
         pub fn value_hsv_optimal(&self) -> ValueHSV {
             self.red_normalized
@@ -293,7 +333,7 @@ pub mod pixel {
         }
 
         /// HSV Value (V): brightness defined as max(R, G, B).
-        /// - Accurate: uses LUT-linearized normalized channels.
+        /// - Accurate: uses linear RGB; more faithful under gamma.
         pub fn value_hsv_accurate(&self) -> ValueHSV {
             self.red_linear.max(self.green_linear.max(self.blue_linear))
         }
@@ -309,7 +349,15 @@ pub mod pixel {
         }
 
         /// HSL Lightness (L): midpoint of max and min channels.
-        /// - Optimal: uses normalized sRGB.
+        ///
+        /// Represents:
+        /// - “Lightness” in HSL; better balance across shadows/highlights than HSV Value.
+        ///
+        /// Use/interpretation:
+        /// - Useful for UI/theming transforms and light/dark segregation.
+        ///
+        /// Implementation detail:
+        /// - Optimal uses normalized sRGB.
         pub fn lightness_hsl_optimal(&self) -> LightnessHSL {
             let maximum_channel = self
                 .red_normalized
@@ -320,8 +368,8 @@ pub mod pixel {
             (maximum_channel + minimum_channel) * 0.5
         }
 
-        /// HSL Lightness (L): midpoint of max and min channels.
-        /// - Accurate: uses LUT-linearized normalized channels.
+        /// HSL Lightness (L): midpoint of max and min channels (linear RGB).
+        /// - Accurate uses linear RGB; preferred for analysis.
         pub fn lightness_hsl_accurate(&self) -> LightnessHSL {
             let maximum_channel = self.red_linear.max(self.green_linear.max(self.blue_linear));
             let minimum_channel = self.red_linear.min(self.green_linear.min(self.blue_linear));
@@ -339,7 +387,15 @@ pub mod pixel {
         }
 
         /// Chroma (C): color purity = max(R,G,B) - min(R,G,B).
-        /// - Optimal: uses normalized sRGB (fast heuristic).
+        ///
+        /// Represents:
+        /// - Distance from gray along the color axes (ignoring brightness).
+        ///
+        /// Use/interpretation:
+        /// - Higher chroma → more vivid color; pair with value/lightness for context.
+        ///
+        /// Implementation detail:
+        /// - Optimal uses normalized sRGB (fast heuristic).
         pub fn chroma_optimal(&self) -> Chroma {
             self.red_normalized
                 .max(self.green_normalized.max(self.blue_normalized))
@@ -348,8 +404,8 @@ pub mod pixel {
                     .min(self.green_normalized.min(self.blue_normalized))
         }
 
-        /// Chroma (C): color purity = max(R,G,B) - min(R,G,B).
-        /// - Accurate: uses LUT-linearized normalized channels.
+        /// Chroma (C): color purity = max(R,G,B) - min(R,G,B) in linear RGB.
+        /// - Accurate uses linear RGB; better behaved under gamma and near gray.
         pub fn chroma_accurate(&self) -> Chroma {
             self.red_linear.max(self.green_linear.max(self.blue_linear))
                 - self.red_linear.min(self.green_linear.min(self.blue_linear))
@@ -366,8 +422,15 @@ pub mod pixel {
         }
 
         /// Saturation (HSV): S = chroma / value.
-        /// - Measures distance from gray relative to Value (max channel).
-        /// - Optimal: uses normalized sRGB.
+        ///
+        /// Represents:
+        /// - Colorfulness relative to brightness; drops near black.
+        ///
+        /// Use/interpretation:
+        /// - Good for “how vivid is this pixel right now?”
+        ///
+        /// Implementation detail:
+        /// - Optimal uses normalized sRGB.
         pub fn saturation_hsv_optimal(&self) -> SaturationHSV {
             let maximum_channel = self
                 .red_normalized
@@ -378,8 +441,8 @@ pub mod pixel {
             self.chroma_optimal() / maximum_channel
         }
 
-        /// Saturation (HSV): S = chroma / value.
-        /// - Accurate: uses LUT-linearized normalized channels.
+        /// Saturation (HSV): S = chroma / value (linear RGB).
+        /// - Accurate uses linear RGB; more consistent across tones.
         pub fn saturation_hsv_accurate(&self) -> SaturationHSV {
             let maximum_channel = self.red_linear.max(self.green_linear.max(self.blue_linear));
             if maximum_channel <= 1e-6 {
@@ -400,8 +463,15 @@ pub mod pixel {
         }
 
         /// Saturation (HSL): S = chroma / (1 - |2L - 1|), where L is HSL lightness.
-        /// - More even across lightness; better perceptual uniformity than HSV saturation.
-        /// - Optimal: uses normalized sRGB.
+        ///
+        /// Represents:
+        /// - Colorfulness normalized by lightness; more even than HSV saturation.
+        ///
+        /// Use/interpretation:
+        /// - Better for UI/graphics workflows where perceptual consistency matters.
+        ///
+        /// Implementation detail:
+        /// - Optimal uses normalized sRGB.
         pub fn saturation_hsl_optimal(&self) -> SaturationHSL {
             let lightness = self.lightness_hsl_optimal();
             let denominator = 1.0 - (2.0 * lightness - 1.0).abs();
@@ -411,8 +481,8 @@ pub mod pixel {
             self.chroma_optimal() / denominator
         }
 
-        /// Saturation (HSL): S = chroma / (1 - |2L - 1|), where L is HSL lightness.
-        /// - Accurate: uses LUT-linearized normalized channels.
+        /// Saturation (HSL): S = chroma / (1 - |2L - 1|) (linear RGB).
+        /// - Accurate uses linear RGB; more stable across tones.
         pub fn saturation_hsl_accurate(&self) -> SaturationHSL {
             let lightness = self.lightness_hsl_accurate();
             let denominator = 1.0 - (2.0 * lightness - 1.0).abs();
@@ -433,7 +503,14 @@ pub mod pixel {
         }
 
         /// Colorfulness: simple proxy ≈ chroma.
-        /// - Higher means more vivid (further from gray).
+        ///
+        /// Represents:
+        /// - Overall “vividness” of the pixel’s color.
+        ///
+        /// Use/interpretation:
+        /// - Quick feature for segmentation or saliency.
+        ///
+        /// Implementation detail:
         /// - Optimal uses sRGB; accurate uses linear.
         pub fn colorfulness_optimal(&self) -> Colorfulness {
             self.chroma_optimal()
@@ -454,7 +531,14 @@ pub mod pixel {
         }
 
         /// Achromaticity: inverse of saturation w.r.t. Value.
-        /// - 1.0 means fully gray; 0.0 means fully saturated at that Value.
+        ///
+        /// Represents:
+        /// - Degree of “grayness” at the current brightness.
+        ///
+        /// Use/interpretation:
+        /// - 1.0 → fully gray; 0.0 → maximally saturated at that Value.
+        ///
+        /// Implementation detail:
         /// - Optimal uses sRGB; accurate uses linear.
         pub fn achromaticity_optimal(&self) -> Achromaticity {
             let maximum_channel = self
@@ -486,7 +570,14 @@ pub mod pixel {
         }
 
         /// Standard deviation across R,G,B channels.
-        /// - Measures channel spread; 0.0 for perfect gray, higher for colorful pixels.
+        ///
+        /// Represents:
+        /// - Channel spread; 0.0 for gray, larger for colorful pixels.
+        ///
+        /// Use/interpretation:
+        /// - Simple measure of how “colored” a pixel is, agnostic to hue.
+        ///
+        /// Implementation detail:
         /// - Optimal uses sRGB; accurate uses linear.
         pub fn channel_stddev_optimal(&self) -> ChannelStdDev {
             let channel_mean =
@@ -516,7 +607,17 @@ pub mod pixel {
         }
 
         /// Chromaticity (CIE x,y) from RGB.
-        /// - Converts RGB → XYZ (D65) and returns x = X/(X+Y+Z), y = Y/(X+Y+Z).
+        ///
+        /// Represents:
+        /// - The color’s location on the CIE chromaticity diagram (x,y), independent of
+        ///   overall luminance. Captures “what color it is” rather than “how bright”.
+        ///
+        /// Use/interpretation:
+        /// - Useful for estimating correlated color temperature (CCT) and comparing colors
+        ///   across brightness changes. Often paired with Y (luminance) for full XYZ.
+        ///
+        /// Implementation detail:
+        /// - Converts RGB → XYZ (D65), then x = X/(X+Y+Z), y = Y/(X+Y+Z).
         /// - Optimal uses normalized sRGB (quick estimate); accurate uses linear RGB.
         pub fn chromaticity_xy_optimal(&self) -> (ChromaticityX, ChromaticityY) {
             let x_tristimulus = 0.4124564 * self.red_normalized
