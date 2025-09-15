@@ -652,6 +652,12 @@ pub mod pixel {
 //   point). Independent of overall brightness (Y acts like luminance). Often used as a
 //   stepping stone to estimates like correlated color temperature (with caveats).
 //
+// - Colorimetry: The science and practice of measuring and numerically representing
+//   color. Involves color spaces (RGB, XYZ, Lab*), white points (e.g., D65), transfer
+//   functions (gamma), and transforms between spaces. In code, this means using
+//   linear RGB when doing “geometric” color math, converting to XYZ/Lab* when needed,
+//   and comparing colors with perceptual metrics like ΔE (pairwise, higher‑dimension).
+//
 // - Computed Channel: The 0..255 channel stored as f32 (fast arithmetic in native scale).
 //
 // - Normalized Channel (sRGB): Channel scaled to 0..1 but still gamma-encoded. Great
