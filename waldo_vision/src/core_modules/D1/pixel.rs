@@ -242,10 +242,10 @@ pub mod pixel {
             let green_linear_normalized = Self::srgb_to_linear_normalized_from_byte(self.green);
             let blue_linear_normalized = Self::srgb_to_linear_normalized_from_byte(self.blue);
 
-            let maximum_channel = red_linear_normalized
-                .max(green_linear_normalized.max(blue_linear_normalized));
-            let minimum_channel = red_linear_normalized
-                .min(green_linear_normalized.min(blue_linear_normalized));
+            let maximum_channel =
+                red_linear_normalized.max(green_linear_normalized.max(blue_linear_normalized));
+            let minimum_channel =
+                red_linear_normalized.min(green_linear_normalized.min(blue_linear_normalized));
             let chroma = maximum_channel - minimum_channel;
 
             if chroma <= 1e-6 {
@@ -314,11 +314,10 @@ pub mod pixel {
         /// HSV Value (V): brightness defined as max(R, G, B).
         /// - Accurate: uses LUT-linearized normalized channels.
         pub fn value_hsv_accurate(&self) -> ValueHSV {
-            Self::srgb_to_linear_normalized_from_byte(self.red)
-                .max(
-                    Self::srgb_to_linear_normalized_from_byte(self.green)
-                        .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-                )
+            Self::srgb_to_linear_normalized_from_byte(self.red).max(
+                Self::srgb_to_linear_normalized_from_byte(self.green)
+                    .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
+            )
         }
 
         #[cfg(feature = "accurate")]
@@ -346,16 +345,14 @@ pub mod pixel {
         /// HSL Lightness (L): midpoint of max and min channels.
         /// - Accurate: uses LUT-linearized normalized channels.
         pub fn lightness_hsl_accurate(&self) -> LightnessHSL {
-            let maximum_channel = Self::srgb_to_linear_normalized_from_byte(self.red)
-                .max(
-                    Self::srgb_to_linear_normalized_from_byte(self.green)
-                        .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-                );
-            let minimum_channel = Self::srgb_to_linear_normalized_from_byte(self.red)
-                .min(
-                    Self::srgb_to_linear_normalized_from_byte(self.green)
-                        .min(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-                );
+            let maximum_channel = Self::srgb_to_linear_normalized_from_byte(self.red).max(
+                Self::srgb_to_linear_normalized_from_byte(self.green)
+                    .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
+            );
+            let minimum_channel = Self::srgb_to_linear_normalized_from_byte(self.red).min(
+                Self::srgb_to_linear_normalized_from_byte(self.green)
+                    .min(Self::srgb_to_linear_normalized_from_byte(self.blue)),
+            );
             (maximum_channel + minimum_channel) * 0.5
         }
 
@@ -382,15 +379,13 @@ pub mod pixel {
         /// Chroma (C): color purity = max(R,G,B) - min(R,G,B).
         /// - Accurate: uses LUT-linearized normalized channels.
         pub fn chroma_accurate(&self) -> Chroma {
-            Self::srgb_to_linear_normalized_from_byte(self.red)
-                .max(
-                    Self::srgb_to_linear_normalized_from_byte(self.green)
-                        .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-                )
-                - Self::srgb_to_linear_normalized_from_byte(self.red).min(
-                    Self::srgb_to_linear_normalized_from_byte(self.green)
-                        .min(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-                )
+            Self::srgb_to_linear_normalized_from_byte(self.red).max(
+                Self::srgb_to_linear_normalized_from_byte(self.green)
+                    .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
+            ) - Self::srgb_to_linear_normalized_from_byte(self.red).min(
+                Self::srgb_to_linear_normalized_from_byte(self.green)
+                    .min(Self::srgb_to_linear_normalized_from_byte(self.blue)),
+            )
         }
 
         #[cfg(feature = "accurate")]
@@ -419,11 +414,10 @@ pub mod pixel {
         /// Saturation (HSV): S = chroma / value.
         /// - Accurate: uses LUT-linearized normalized channels.
         pub fn saturation_hsv_accurate(&self) -> SaturationHSV {
-            let maximum_channel = Self::srgb_to_linear_normalized_from_byte(self.red)
-                .max(
-                    Self::srgb_to_linear_normalized_from_byte(self.green)
-                        .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-                );
+            let maximum_channel = Self::srgb_to_linear_normalized_from_byte(self.red).max(
+                Self::srgb_to_linear_normalized_from_byte(self.green)
+                    .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
+            );
             if maximum_channel <= 1e-6 {
                 return 0.0;
             }
@@ -513,21 +507,19 @@ pub mod pixel {
         }
 
         pub fn achromaticity_accurate(&self) -> f32 {
-            let maximum_channel = Self::srgb_to_linear_normalized_from_byte(self.red)
-                .max(
-                    Self::srgb_to_linear_normalized_from_byte(self.green)
-                        .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-                );
+            let maximum_channel = Self::srgb_to_linear_normalized_from_byte(self.red).max(
+                Self::srgb_to_linear_normalized_from_byte(self.green)
+                    .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
+            );
             if maximum_channel <= 1e-6 {
                 return 1.0;
             }
-            1.0
-                - (maximum_channel
-                    - Self::srgb_to_linear_normalized_from_byte(self.red).min(
-                        Self::srgb_to_linear_normalized_from_byte(self.green)
-                            .min(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-                    ))
-                    / maximum_channel
+            1.0 - (maximum_channel
+                - Self::srgb_to_linear_normalized_from_byte(self.red).min(
+                    Self::srgb_to_linear_normalized_from_byte(self.green)
+                        .min(Self::srgb_to_linear_normalized_from_byte(self.blue)),
+                ))
+                / maximum_channel
         }
 
         #[cfg(feature = "accurate")]
@@ -544,8 +536,7 @@ pub mod pixel {
         /// - Measures channel spread; 0.0 for perfect gray, higher for colorful pixels.
         /// - Optimal uses sRGB; accurate uses linear.
         pub fn channel_stddev_optimal(&self) -> ChannelStdDev {
-            let mean =
-                (self.red_normalized + self.green_normalized + self.blue_normalized) / 3.0;
+            let mean = (self.red_normalized + self.green_normalized + self.blue_normalized) / 3.0;
             let vr = (self.red_normalized - mean).powi(2);
             let vg = (self.green_normalized - mean).powi(2);
             let vb = (self.blue_normalized - mean).powi(2);
