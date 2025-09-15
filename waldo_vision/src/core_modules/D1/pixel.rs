@@ -7,9 +7,9 @@
 //
 // What lives here (by design):
 // - Raw channels (RGBA) and three common transforms of those channels
-//   • computed (0..255 as f32): 1:1 numeric copy of the byte values
-//   • normalized (0..1 sRGB):   divide by 255.0, still gamma‑encoded
-//   • linearized (0..255 linear): sRGB → linear light, scaled by 255.0
+//   • ComputedChannel (0..255):            1:1 numeric copy of the byte values
+//   • NormalizedChannel (0..1, sRGB):      divide by 255.0, still gamma‑encoded
+//   • LinearizedChannel (0..1, linear RGB): sRGB → linear light, normalized
 //   Alpha is not gamma‑encoded and is not linearized — it is passed through.
 //
 // Why so many channel forms?
@@ -43,22 +43,25 @@ pub mod pixel {
     pub type Byte = u8;
     pub type Bytes = Vec<Byte>;
     pub type Channel = Byte;
-    pub type ComputedChannel = f32;
-    pub type NormalizedChannel = f32;
-    pub type LinearizedChannel = f32;
-    pub type Hue = f32;
-    pub type SaturationHSV = f32;
-    pub type SaturationHSL = f32;
-    pub type ValueHSV = f32;
-    pub type LightnessHSL = f32;
-    pub type Chroma = f32;
-    pub type Colorfulness = f32;
-    pub type ChromaticityX = f32;
-    pub type ChromaticityY = f32;
-    pub type ChannelStdDev = f32;
-    pub type Luminance = f64;
+    pub type FloatType = f64;
+    pub type ComputedChannel = FloatType;
+    pub type NormalizedChannel = FloatType;
+    pub type LinearizedChannel = FloatType;
+    pub type Hue = FloatType;
+    pub type SaturationHSV = FloatType;
+    pub type SaturationHSL = FloatType;
+    pub type ValueHSV = FloatType;
+    pub type LightnessHSL = FloatType;
+    pub type Chroma = FloatType;
+    pub type Colorfulness = FloatType;
+    pub type ChromaticityX = FloatType;
+    pub type ChromaticityY = FloatType;
+    pub type ChannelStdDev = FloatType;
+    pub type Luminance = FloatType;
     pub type Color = i16;
-    pub type Sum = f32;
+    pub type Sum = FloatType;
+    pub type Achromaticity = FloatType;
+    pub type ColorRatios = (FloatType, FloatType, FloatType);
 
     const CHANNELS: usize = 4;
 
@@ -84,12 +87,12 @@ pub mod pixel {
         pub blue_computed: ComputedChannel,
         /// The alpha (transparency) channel value (0.0-255.0).
         pub alpha_computed: ComputedChannel,
-        /// The linearized red channel value (0.0-255.0).
-        pub red_linearized: LinearizedChannel,
-        /// The linearized green channel value (0.0-255.0).
-        pub green_linearized: LinearizedChannel,
-        /// The linearized blue channel value (0.0-255.0).
-        pub blue_linearized: LinearizedChannel,
+        /// The linearized red channel value (0.0-1.0, sRGB gamma-decoded).
+        pub red_linear: LinearizedChannel,
+        /// The linearized green channel value (0.0-1.0, sRGB gamma-decoded).
+        pub green_linear: LinearizedChannel,
+        /// The linearized blue channel value (0.0-1.0, sRGB gamma-decoded).
+        pub blue_linear: LinearizedChannel,
         // Alpha is not gamma-encoded; keep as-is in linear space. Reuse alpha_computed
         /// The red channel value (0.0-1.0).
         pub red_normalized: NormalizedChannel,
@@ -113,9 +116,9 @@ pub mod pixel {
                 green_computed: ComputedChannel::default(),
                 blue_computed: ComputedChannel::default(),
                 alpha_computed: ComputedChannel::default(),
-                red_linearized: LinearizedChannel::default(),
-                green_linearized: LinearizedChannel::default(),
-                blue_linearized: LinearizedChannel::default(),
+                red_linear: LinearizedChannel::default(),
+                green_linear: LinearizedChannel::default(),
+                blue_linear: LinearizedChannel::default(),
                 red_normalized: NormalizedChannel::default(),
                 green_normalized: NormalizedChannel::default(),
                 blue_normalized: NormalizedChannel::default(),
@@ -126,6 +129,11 @@ pub mod pixel {
 
     impl Pixel {
         pub fn new(red: Channel, green: Channel, blue: Channel, alpha: Channel) -> Self {
+            // Precompute linear channels once per pixel (single LUT hit each), 0..1 linear.
+            let red_linear_value = Self::srgb_to_linear_normalized_from_byte(red);
+            let green_linear_value = Self::srgb_to_linear_normalized_from_byte(green);
+            let blue_linear_value = Self::srgb_to_linear_normalized_from_byte(blue);
+
             Pixel {
                 red,
                 green,
@@ -135,13 +143,13 @@ pub mod pixel {
                 green_computed: green as ComputedChannel,
                 blue_computed: blue as ComputedChannel,
                 alpha_computed: alpha as ComputedChannel,
-                red_linearized: Self::srgb_to_linear_normalized_from_byte(red) * 255.0f32,
-                green_linearized: Self::srgb_to_linear_normalized_from_byte(green) * 255.0f32,
-                blue_linearized: Self::srgb_to_linear_normalized_from_byte(blue) * 255.0f32,
-                red_normalized: red as NormalizedChannel / 255.0f32,
-                green_normalized: green as NormalizedChannel / 255.0f32,
-                blue_normalized: blue as NormalizedChannel / 255.0f32,
-                alpha_normalized: alpha as NormalizedChannel / 255.0f32,
+                red_linear: red_linear_value,
+                green_linear: green_linear_value,
+                blue_linear: blue_linear_value,
+                red_normalized: red as NormalizedChannel / 255.0,
+                green_normalized: green as NormalizedChannel / 255.0,
+                blue_normalized: blue as NormalizedChannel / 255.0,
+                alpha_normalized: alpha as NormalizedChannel / 255.0,
             }
         }
 
@@ -150,14 +158,14 @@ pub mod pixel {
         #[inline]
         fn srgb_to_linear_normalized_from_byte(srgb_value: Byte) -> NormalizedChannel {
             let table = SRGB_TO_LINEAR_LUT.get_or_init(|| {
-                let mut table = [0.0f32; 256];
+                let mut table: [NormalizedChannel; 256] = [0.0; 256];
                 let mut i = 0usize;
                 while i < 256 {
-                    let srgb_normalized = i as NormalizedChannel / 255.0f32;
-                    table[i] = if srgb_normalized <= 0.04045f32 {
-                        srgb_normalized / 12.92f32
+                    let srgb_normalized: NormalizedChannel = i as NormalizedChannel / 255.0;
+                    table[i] = if srgb_normalized <= 0.04045 {
+                        srgb_normalized / 12.92
                     } else {
-                        ((srgb_normalized + 0.055f32) / 1.055f32).powf(2.4f32)
+                        ((srgb_normalized + 0.055) / 1.055).powf(2.4)
                     };
                     i += 1;
                 }
@@ -172,12 +180,9 @@ pub mod pixel {
         ///
         /// - Interprets perceived brightness as a weighted sum of RGB.
         /// - Useful for fast brightness thresholds and motion/heat maps.
-        /// - Uses 0..255 computed channels; cast to f64 for stability.
+        /// - Uses 0..255 channels via `ComputedChannel`.
         pub fn luminance(&self) -> Luminance {
-            // Keep legacy definition using 0..255 computed channels; cast to f64 for stability
-            0.299_f64 * self.red_computed as f64
-                + 0.587_f64 * self.green_computed as f64
-                + 0.114_f64 * self.blue_computed as f64
+            0.299 * self.red_computed + 0.587 * self.green_computed + 0.114 * self.blue_computed
         }
 
         /// Hue angle in degrees [0, 360) — optimal (fast) variant.
@@ -220,14 +225,8 @@ pub mod pixel {
         /// - Uses LUT-linearized normalized channels (sRGB → linear) for correctness.
         /// - Prefer this when color fidelity matters (analytics, feature extraction).
         pub fn hue_accurate(&self) -> Hue {
-            let red_linear_normalized = Self::srgb_to_linear_normalized_from_byte(self.red);
-            let green_linear_normalized = Self::srgb_to_linear_normalized_from_byte(self.green);
-            let blue_linear_normalized = Self::srgb_to_linear_normalized_from_byte(self.blue);
-
-            let maximum_channel =
-                red_linear_normalized.max(green_linear_normalized.max(blue_linear_normalized));
-            let minimum_channel =
-                red_linear_normalized.min(green_linear_normalized.min(blue_linear_normalized));
+            let maximum_channel = self.red_linear.max(self.green_linear.max(self.blue_linear));
+            let minimum_channel = self.red_linear.min(self.green_linear.min(self.blue_linear));
             let chroma = maximum_channel - minimum_channel;
 
             if chroma <= 1e-6 {
@@ -236,12 +235,12 @@ pub mod pixel {
 
             let inverse_chroma = 1.0 / chroma;
 
-            let (base_difference, sector_offset) = if maximum_channel == red_linear_normalized {
-                (green_linear_normalized - blue_linear_normalized, 0.0)
-            } else if maximum_channel == green_linear_normalized {
-                (blue_linear_normalized - red_linear_normalized, 2.0)
+            let (base_difference, sector_offset) = if maximum_channel == self.red_linear {
+                (self.green_linear - self.blue_linear, 0.0)
+            } else if maximum_channel == self.green_linear {
+                (self.blue_linear - self.red_linear, 2.0)
             } else {
-                (red_linear_normalized - green_linear_normalized, 4.0)
+                (self.red_linear - self.green_linear, 4.0)
             };
 
             let mut hue_degrees = (base_difference * inverse_chroma + sector_offset) * 60.0;
@@ -266,23 +265,23 @@ pub mod pixel {
 
         /// =================================Heuristics==================================
 
-        /// Fast brightness proxy: raw RGB channel sum (0..255 scale each).
-        /// - Cheap heuristic useful for quick thresholds and deltas.
+        /// Fast brightness proxy: sum of computed RGB channels (0..255 scale each).
+        /// - Avoids repeated casting by using precomputed `ComputedChannel` fields.
         pub fn sum(&self) -> Sum {
-            (self.red as Color + self.green as Color + self.blue as Color) as Sum
+            self.red_computed + self.green_computed + self.blue_computed
         }
 
         /// Per-channel contribution ratios (R, G, B) that sum to 1.0.
-        /// - Useful for hue-like comparisons or color distance metrics.
-        pub fn color_ratios(&self) -> (f32, f32, f32) {
+        /// - Uses `ComputedChannel` values to avoid extra casts.
+        pub fn color_ratios(&self) -> ColorRatios {
             let sum = self.sum();
             if sum == 0.0 {
                 return (0.0, 0.0, 0.0);
             }
             (
-                self.red as f32 / sum,
-                self.green as f32 / sum,
-                self.blue as f32 / sum,
+                self.red_computed / sum,
+                self.green_computed / sum,
+                self.blue_computed / sum,
             )
         }
 
@@ -296,10 +295,7 @@ pub mod pixel {
         /// HSV Value (V): brightness defined as max(R, G, B).
         /// - Accurate: uses LUT-linearized normalized channels.
         pub fn value_hsv_accurate(&self) -> ValueHSV {
-            Self::srgb_to_linear_normalized_from_byte(self.red).max(
-                Self::srgb_to_linear_normalized_from_byte(self.green)
-                    .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-            )
+            self.red_linear.max(self.green_linear.max(self.blue_linear))
         }
 
         #[cfg(feature = "accurate")]
@@ -327,14 +323,8 @@ pub mod pixel {
         /// HSL Lightness (L): midpoint of max and min channels.
         /// - Accurate: uses LUT-linearized normalized channels.
         pub fn lightness_hsl_accurate(&self) -> LightnessHSL {
-            let maximum_channel = Self::srgb_to_linear_normalized_from_byte(self.red).max(
-                Self::srgb_to_linear_normalized_from_byte(self.green)
-                    .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-            );
-            let minimum_channel = Self::srgb_to_linear_normalized_from_byte(self.red).min(
-                Self::srgb_to_linear_normalized_from_byte(self.green)
-                    .min(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-            );
+            let maximum_channel = self.red_linear.max(self.green_linear.max(self.blue_linear));
+            let minimum_channel = self.red_linear.min(self.green_linear.min(self.blue_linear));
             (maximum_channel + minimum_channel) * 0.5
         }
 
@@ -361,13 +351,8 @@ pub mod pixel {
         /// Chroma (C): color purity = max(R,G,B) - min(R,G,B).
         /// - Accurate: uses LUT-linearized normalized channels.
         pub fn chroma_accurate(&self) -> Chroma {
-            Self::srgb_to_linear_normalized_from_byte(self.red).max(
-                Self::srgb_to_linear_normalized_from_byte(self.green)
-                    .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-            ) - Self::srgb_to_linear_normalized_from_byte(self.red).min(
-                Self::srgb_to_linear_normalized_from_byte(self.green)
-                    .min(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-            )
+            self.red_linear.max(self.green_linear.max(self.blue_linear))
+                - self.red_linear.min(self.green_linear.min(self.blue_linear))
         }
 
         #[cfg(feature = "accurate")]
@@ -396,18 +381,11 @@ pub mod pixel {
         /// Saturation (HSV): S = chroma / value.
         /// - Accurate: uses LUT-linearized normalized channels.
         pub fn saturation_hsv_accurate(&self) -> SaturationHSV {
-            let maximum_channel = Self::srgb_to_linear_normalized_from_byte(self.red).max(
-                Self::srgb_to_linear_normalized_from_byte(self.green)
-                    .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-            );
+            let maximum_channel = self.red_linear.max(self.green_linear.max(self.blue_linear));
             if maximum_channel <= 1e-6 {
                 return 0.0;
             }
-            (maximum_channel
-                - Self::srgb_to_linear_normalized_from_byte(self.red).min(
-                    Self::srgb_to_linear_normalized_from_byte(self.green)
-                        .min(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-                ))
+            (maximum_channel - self.red_linear.min(self.green_linear.min(self.blue_linear)))
                 / maximum_channel
         }
 
@@ -478,7 +456,7 @@ pub mod pixel {
         /// Achromaticity: inverse of saturation w.r.t. Value.
         /// - 1.0 means fully gray; 0.0 means fully saturated at that Value.
         /// - Optimal uses sRGB; accurate uses linear.
-        pub fn achromaticity_optimal(&self) -> f32 {
+        pub fn achromaticity_optimal(&self) -> Achromaticity {
             let maximum_channel = self
                 .red_normalized
                 .max(self.green_normalized.max(self.blue_normalized));
@@ -488,29 +466,22 @@ pub mod pixel {
             1.0 - self.chroma_optimal() / maximum_channel
         }
 
-        pub fn achromaticity_accurate(&self) -> f32 {
-            let maximum_channel = Self::srgb_to_linear_normalized_from_byte(self.red).max(
-                Self::srgb_to_linear_normalized_from_byte(self.green)
-                    .max(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-            );
+        pub fn achromaticity_accurate(&self) -> Achromaticity {
+            let maximum_channel = self.red_linear.max(self.green_linear.max(self.blue_linear));
             if maximum_channel <= 1e-6 {
                 return 1.0;
             }
-            1.0 - (maximum_channel
-                - Self::srgb_to_linear_normalized_from_byte(self.red).min(
-                    Self::srgb_to_linear_normalized_from_byte(self.green)
-                        .min(Self::srgb_to_linear_normalized_from_byte(self.blue)),
-                ))
+            1.0 - (maximum_channel - self.red_linear.min(self.green_linear.min(self.blue_linear)))
                 / maximum_channel
         }
 
         #[cfg(feature = "accurate")]
-        pub fn achromaticity(&self) -> f32 {
+        pub fn achromaticity(&self) -> Achromaticity {
             self.achromaticity_accurate()
         }
 
         #[cfg(not(feature = "accurate"))]
-        pub fn achromaticity(&self) -> f32 {
+        pub fn achromaticity(&self) -> Achromaticity {
             self.achromaticity_optimal()
         }
 
@@ -526,13 +497,10 @@ pub mod pixel {
         }
 
         pub fn channel_stddev_accurate(&self) -> ChannelStdDev {
-            let mean = (Self::srgb_to_linear_normalized_from_byte(self.red)
-                + Self::srgb_to_linear_normalized_from_byte(self.green)
-                + Self::srgb_to_linear_normalized_from_byte(self.blue))
-                / 3.0;
-            let vr = (Self::srgb_to_linear_normalized_from_byte(self.red) - mean).powi(2);
-            let vg = (Self::srgb_to_linear_normalized_from_byte(self.green) - mean).powi(2);
-            let vb = (Self::srgb_to_linear_normalized_from_byte(self.blue) - mean).powi(2);
+            let mean = (self.red_linear + self.green_linear + self.blue_linear) / 3.0;
+            let vr = (self.red_linear - mean).powi(2);
+            let vg = (self.green_linear - mean).powi(2);
+            let vb = (self.blue_linear - mean).powi(2);
             ((vr + vg + vb) / 3.0).sqrt()
         }
 
@@ -550,15 +518,15 @@ pub mod pixel {
         /// - Converts RGB → XYZ (D65) and returns x = X/(X+Y+Z), y = Y/(X+Y+Z).
         /// - Optimal uses normalized sRGB (quick estimate); accurate uses linear RGB.
         pub fn chromaticity_xy_optimal(&self) -> (ChromaticityX, ChromaticityY) {
-            let x = 0.4124564f32 * self.red_normalized
-                + 0.3575761f32 * self.green_normalized
-                + 0.1804375f32 * self.blue_normalized;
-            let y = 0.2126729f32 * self.red_normalized
-                + 0.7151522f32 * self.green_normalized
-                + 0.0721750f32 * self.blue_normalized;
-            let z = 0.0193339f32 * self.red_normalized
-                + 0.1191920f32 * self.green_normalized
-                + 0.9503041f32 * self.blue_normalized;
+            let x = 0.4124564 * self.red_normalized
+                + 0.3575761 * self.green_normalized
+                + 0.1804375 * self.blue_normalized;
+            let y = 0.2126729 * self.red_normalized
+                + 0.7151522 * self.green_normalized
+                + 0.0721750 * self.blue_normalized;
+            let z = 0.0193339 * self.red_normalized
+                + 0.1191920 * self.green_normalized
+                + 0.9503041 * self.blue_normalized;
             let sum = x + y + z;
             if sum <= 1e-12 {
                 return (0.0, 0.0);
@@ -567,15 +535,15 @@ pub mod pixel {
         }
 
         pub fn chromaticity_xy_accurate(&self) -> (ChromaticityX, ChromaticityY) {
-            let x = 0.4124564f32 * Self::srgb_to_linear_normalized_from_byte(self.red)
-                + 0.3575761f32 * Self::srgb_to_linear_normalized_from_byte(self.green)
-                + 0.1804375f32 * Self::srgb_to_linear_normalized_from_byte(self.blue);
-            let y = 0.2126729f32 * Self::srgb_to_linear_normalized_from_byte(self.red)
-                + 0.7151522f32 * Self::srgb_to_linear_normalized_from_byte(self.green)
-                + 0.0721750f32 * Self::srgb_to_linear_normalized_from_byte(self.blue);
-            let z = 0.0193339f32 * Self::srgb_to_linear_normalized_from_byte(self.red)
-                + 0.1191920f32 * Self::srgb_to_linear_normalized_from_byte(self.green)
-                + 0.9503041f32 * Self::srgb_to_linear_normalized_from_byte(self.blue);
+            let x = 0.4124564 * self.red_linear
+                + 0.3575761 * self.green_linear
+                + 0.1804375 * self.blue_linear;
+            let y = 0.2126729 * self.red_linear
+                + 0.7151522 * self.green_linear
+                + 0.0721750 * self.blue_linear;
+            let z = 0.0193339 * self.red_linear
+                + 0.1191920 * self.green_linear
+                + 0.9503041 * self.blue_linear;
             let sum = x + y + z;
             if sum <= 1e-12 {
                 return (0.0, 0.0);
@@ -650,13 +618,13 @@ pub mod pixel {
 //   linear RGB when doing “geometric” color math, converting to XYZ/Lab* when needed,
 //   and comparing colors with perceptual metrics like ΔE (pairwise, higher‑dimension).
 //
-// - Computed Channel: The 0..255 channel stored as f32 (fast arithmetic in native scale).
+// - ComputedChannel: The 0..255 channel stored in floating precision.
 //
-// - Normalized Channel (sRGB): Channel scaled to 0..1 but still gamma-encoded. Great
+// - NormalizedChannel (sRGB): Channel scaled to 0..1 but still gamma-encoded. Great
 //   for quick ratios and bounded math, not strictly “linear” to light.
 //
-// - Linearized Channel: Gamma-decoded channel proportional to light intensity. Accurate
-//   for colorimetry. We use a 256-entry sRGB→linear lookup table for speed.
+// - LinearizedChannel: Gamma-decoded channel proportional to light intensity,
+//   in 0..1. Most “accurate” heuristics operate on this form directly.
 //
 // - Channel Standard Deviation: Spread of R,G,B around their mean. Zero for pure grays;
 //   larger for colorful pixels.
