@@ -489,19 +489,20 @@ pub mod pixel {
         /// - Measures channel spread; 0.0 for perfect gray, higher for colorful pixels.
         /// - Optimal uses sRGB; accurate uses linear.
         pub fn channel_stddev_optimal(&self) -> ChannelStdDev {
-            let mean = (self.red_normalized + self.green_normalized + self.blue_normalized) / 3.0;
-            let vr = (self.red_normalized - mean).powi(2);
-            let vg = (self.green_normalized - mean).powi(2);
-            let vb = (self.blue_normalized - mean).powi(2);
-            ((vr + vg + vb) / 3.0).sqrt()
+            let channel_mean =
+                (self.red_normalized + self.green_normalized + self.blue_normalized) / 3.0;
+            let red_variance = (self.red_normalized - channel_mean).powi(2);
+            let green_variance = (self.green_normalized - channel_mean).powi(2);
+            let blue_variance = (self.blue_normalized - channel_mean).powi(2);
+            ((red_variance + green_variance + blue_variance) / 3.0).sqrt()
         }
 
         pub fn channel_stddev_accurate(&self) -> ChannelStdDev {
-            let mean = (self.red_linear + self.green_linear + self.blue_linear) / 3.0;
-            let vr = (self.red_linear - mean).powi(2);
-            let vg = (self.green_linear - mean).powi(2);
-            let vb = (self.blue_linear - mean).powi(2);
-            ((vr + vg + vb) / 3.0).sqrt()
+            let channel_mean = (self.red_linear + self.green_linear + self.blue_linear) / 3.0;
+            let red_variance = (self.red_linear - channel_mean).powi(2);
+            let green_variance = (self.green_linear - channel_mean).powi(2);
+            let blue_variance = (self.blue_linear - channel_mean).powi(2);
+            ((red_variance + green_variance + blue_variance) / 3.0).sqrt()
         }
 
         #[cfg(feature = "accurate")]
@@ -518,37 +519,37 @@ pub mod pixel {
         /// - Converts RGB → XYZ (D65) and returns x = X/(X+Y+Z), y = Y/(X+Y+Z).
         /// - Optimal uses normalized sRGB (quick estimate); accurate uses linear RGB.
         pub fn chromaticity_xy_optimal(&self) -> (ChromaticityX, ChromaticityY) {
-            let x = 0.4124564 * self.red_normalized
+            let x_tristimulus = 0.4124564 * self.red_normalized
                 + 0.3575761 * self.green_normalized
                 + 0.1804375 * self.blue_normalized;
-            let y = 0.2126729 * self.red_normalized
+            let y_tristimulus = 0.2126729 * self.red_normalized
                 + 0.7151522 * self.green_normalized
                 + 0.0721750 * self.blue_normalized;
-            let z = 0.0193339 * self.red_normalized
+            let z_tristimulus = 0.0193339 * self.red_normalized
                 + 0.1191920 * self.green_normalized
                 + 0.9503041 * self.blue_normalized;
-            let sum = x + y + z;
-            if sum <= 1e-12 {
+            let xyz_sum = x_tristimulus + y_tristimulus + z_tristimulus;
+            if xyz_sum <= 1e-12 {
                 return (0.0, 0.0);
             }
-            (x / sum, y / sum)
+            (x_tristimulus / xyz_sum, y_tristimulus / xyz_sum)
         }
 
         pub fn chromaticity_xy_accurate(&self) -> (ChromaticityX, ChromaticityY) {
-            let x = 0.4124564 * self.red_linear
+            let x_tristimulus = 0.4124564 * self.red_linear
                 + 0.3575761 * self.green_linear
                 + 0.1804375 * self.blue_linear;
-            let y = 0.2126729 * self.red_linear
+            let y_tristimulus = 0.2126729 * self.red_linear
                 + 0.7151522 * self.green_linear
                 + 0.0721750 * self.blue_linear;
-            let z = 0.0193339 * self.red_linear
+            let z_tristimulus = 0.0193339 * self.red_linear
                 + 0.1191920 * self.green_linear
                 + 0.9503041 * self.blue_linear;
-            let sum = x + y + z;
-            if sum <= 1e-12 {
+            let xyz_sum = x_tristimulus + y_tristimulus + z_tristimulus;
+            if xyz_sum <= 1e-12 {
                 return (0.0, 0.0);
             }
-            (x / sum, y / sum)
+            (x_tristimulus / xyz_sum, y_tristimulus / xyz_sum)
         }
 
         #[cfg(feature = "accurate")]
