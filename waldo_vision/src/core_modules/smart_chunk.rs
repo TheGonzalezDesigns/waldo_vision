@@ -20,8 +20,8 @@
 //     that event with statistical scores from all other tracked dimensions, allowing
 //     higher-level modules to make more intelligent decisions.
 
-use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::D1::pixel::pixel::Pixel;
+use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::smart_pixel::smart_pixel::{HueDifference, LuminanceDelta, SmartPixel};
 use std::collections::VecDeque;
 
