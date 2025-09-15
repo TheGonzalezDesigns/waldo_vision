@@ -18,7 +18,7 @@
 //     where a single pixel from a new frame is compared against a history of pixels.
 
 pub mod smart_pixel {
-    use crate::core_modules::pixel::pixel::*;
+    use crate::core_modules::D1::pixel::pixel::*;
 
     pub type ColorDelta = u16;
     pub type LuminanceDelta = f64;
