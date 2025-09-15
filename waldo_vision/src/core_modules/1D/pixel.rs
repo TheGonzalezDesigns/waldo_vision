@@ -100,7 +100,23 @@ pub mod pixel {
 
     impl Default for Pixel {
         fn default() -> Self {
-            Pixel::new(0, 0, 0, 0)
+            Pixel {
+                red: Channel::default(),
+                green: Channel::default(),
+                blue: Channel::default(),
+                alpha: Channel::default(),
+                red_computed: ComputedChannel::default(),
+                green_computed: ComputedChannel::default(),
+                blue_computed: ComputedChannel::default(),
+                alpha_computed: ComputedChannel::default(),
+                red_linearized: LinearizedChannel::default(),
+                green_linearized: LinearizedChannel::default(),
+                blue_linearized: LinearizedChannel::default(),
+                red_normalized: NormalizedChannel::default(),
+                green_normalized: NormalizedChannel::default(),
+                blue_normalized: NormalizedChannel::default(),
+                alpha_normalized: NormalizedChannel::default(),
+            }
         }
     }
 
