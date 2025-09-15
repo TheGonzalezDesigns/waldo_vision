@@ -607,14 +607,27 @@ pub async fn start_server(
 #[cfg(feature = "web")]
 async fn ingest_worker(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>, bus: FrameBus) {
     use image::{ColorType, DynamicImage};
-    use waldo_vision::pipeline::{VisionPipeline, PipelineConfig};
+    use waldo_vision::pipeline::{PipelineConfig, VisionPipeline};
 
     // Initialize when first frame arrives (dimensions unknown beforehand)
     let mut pipeline: Option<(VisionPipeline, u32, u32, u32, u32)> = None; // (pipe, w, h, chunk_w, chunk_h)
 
     while let Some(jpeg) = rx.recv().await {
-        if jpeg.is_empty() { println!("ingest_worker: received empty frame; skipping"); continue; }
-        let img = match image::load_from_memory(&jpeg) { Ok(i) => i, Err(e) => { println!("ingest_worker: JPEG decode error: {} ({} bytes)", e, jpeg.len()); continue } };
+        if jpeg.is_empty() {
+            println!("ingest_worker: received empty frame; skipping");
+            continue;
+        }
+        let img = match image::load_from_memory(&jpeg) {
+            Ok(i) => i,
+            Err(e) => {
+                println!(
+                    "ingest_worker: JPEG decode error: {} ({} bytes)",
+                    e,
+                    jpeg.len()
+                );
+                continue;
+            }
+        };
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();
         if pipeline.is_none() {
@@ -631,8 +644,17 @@ async fn ingest_worker(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>, bus: FrameB
                 disturbance_exit_threshold: 0.15,
                 disturbance_confirmation_frames: 5,
             };
-            println!("ingest_worker: initializing pipeline w={} h={} chunk={}x{}", w, h, cfg.chunk_width, cfg.chunk_height);
-            pipeline = Some((VisionPipeline::new(cfg.clone()), w, h, cfg.chunk_width, cfg.chunk_height));
+            println!(
+                "ingest_worker: initializing pipeline w={} h={} chunk={}x{}",
+                w, h, cfg.chunk_width, cfg.chunk_height
+            );
+            pipeline = Some((
+                VisionPipeline::new(cfg.clone()),
+                w,
+                h,
+                cfg.chunk_width,
+                cfg.chunk_height,
+            ));
         }
         let (pipe, _pw, _ph, chunk_w, chunk_h) = pipeline.as_mut().unwrap();
         let analysis = pipe.process_frame(rgba.as_raw());
@@ -646,8 +668,11 @@ async fn ingest_worker(mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>, bus: FrameB
         match enc.encode(&rgb, w, h, ColorType::Rgb8.into()) {
             Ok(_) => {
                 println!("ingest_worker: published {} bytes ({}x{})", out.len(), w, h);
-                let _ = bus.frames_tx.send(FramePacket{
-                    ts_millis: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+                let _ = bus.frames_tx.send(FramePacket {
+                    ts_millis: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
                     width: w,
                     height: h,
                     format: FrameFormat::Jpeg,
@@ -676,7 +701,9 @@ fn draw_overlays(
         let mut y0 = (tl.y * chunk_h) as i32;
         let mut x1 = ((br.x + 1) * chunk_w) as i32 - 1;
         let mut y1 = ((br.y + 1) * chunk_h) as i32 - 1;
-        if x1 <= x0 || y1 <= y0 { continue; }
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
         let (iw, ih) = rgba.dimensions();
         x0 = x0.clamp(0, iw.saturating_sub(1) as i32);
         y0 = y0.clamp(0, ih.saturating_sub(1) as i32);
@@ -690,12 +717,20 @@ fn draw_overlays(
             TrackedState::Anomalous => image::Rgba([0, 0, 255, 255]),
         };
         for x in x0..=x1 {
-            if y0 >= 0 { rgba.put_pixel(x as u32, y0 as u32, color); }
-            if y1 >= 0 { rgba.put_pixel(x as u32, y1 as u32, color); }
+            if y0 >= 0 {
+                rgba.put_pixel(x as u32, y0 as u32, color);
+            }
+            if y1 >= 0 {
+                rgba.put_pixel(x as u32, y1 as u32, color);
+            }
         }
         for y in y0..=y1 {
-            if x0 >= 0 { rgba.put_pixel(x0 as u32, y as u32, color); }
-            if x1 >= 0 { rgba.put_pixel(x1 as u32, y as u32, color); }
+            if x0 >= 0 {
+                rgba.put_pixel(x0 as u32, y as u32, color);
+            }
+            if x1 >= 0 {
+                rgba.put_pixel(x1 as u32, y as u32, color);
+            }
         }
     }
     rgba
