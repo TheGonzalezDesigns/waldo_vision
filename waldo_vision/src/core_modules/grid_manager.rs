@@ -17,7 +17,7 @@
 //     aggregate their individual `ChunkStatus` reports into a single, unified data
 //     structure (a `Vec<ChunkStatus>`). This "status map" is the final output of
 //     the entire temporal layer and the direct input for the next architectural
-//     layer (the `SmartBlob` spatial analyzer).
+//     layer (the `Blob` spatial analyzer).
 // 4.  **Decoupling**: It decouples the main application logic from the chunk analysis
 //     logic. The main loop will only need to interact with the `GridManager`, giving
 //     it a new frame and receiving a status map, without needing to know the
