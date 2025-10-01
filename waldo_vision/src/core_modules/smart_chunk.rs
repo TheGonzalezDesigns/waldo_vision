@@ -14,7 +14,7 @@
 //     deviations for each channel of change, creating adaptive thresholds.
 // 3.  **Temporal Focus**: Its analysis is purely temporal. It knows *when* something
 //     unusual is happening but knows nothing about its neighbors. It provides the
-//     foundational "sensory input" for the higher-level `SmartBlob` detector.
+//     foundational "sensory input" for the higher-level `Blob` detector.
 // 4.  **Rich Data Provider**: Its primary role is to produce a rich "signature" of any
 //     anomaly. While it uses luminance as the primary trigger for an event, it enriches
 //     that event with statistical scores from all other tracked dimensions, allowing
@@ -22,7 +22,7 @@
 
 use crate::core_modules::D1::pixel::pixel::Pixel;
 use crate::core_modules::chunk::chunk::Chunk;
-use crate::core_modules::smart_pixel::smart_pixel::{HueDifference, LuminanceDelta, SmartPixel};
+use crate::core_modules::D2::smart_pixel::smart_pixel::{HueDelta, LuminanceDelta, SmartPixel};
 use std::collections::VecDeque;
 
 const HISTORY_WINDOW_SIZE: usize = 20;
@@ -70,7 +70,7 @@ pub struct SmartChunk {
     /// A sliding window of the calculated color difference between frames.
     color_delta_history: VecDeque<f64>,
     /// A sliding window of the calculated hue difference between frames.
-    hue_difference_history: VecDeque<HueDifference>,
+    delta_hue_history: VecDeque<HueDelta>,
 
     // --- Learned State (Published for advanced analysis) ---
     /// The learned average (mean) change in luminance for this chunk.
@@ -82,9 +82,9 @@ pub struct SmartChunk {
     /// The learned standard deviation of the change in color sum.
     pub std_dev_color_delta: f64,
     /// The learned average (mean) change in hue for this chunk.
-    pub mean_hue_difference: f64,
+    pub mean_delta_hue: f64,
     /// The learned standard deviation of the change in hue.
-    pub std_dev_hue_difference: f64,
+    pub std_dev_delta_hue: f64,
 
     // --- Current Status ---
     /// The current calculated status of this chunk.
@@ -99,13 +99,13 @@ impl SmartChunk {
             average_pixel_history: VecDeque::with_capacity(HISTORY_WINDOW_SIZE + 1),
             luminance_delta_history: VecDeque::with_capacity(HISTORY_WINDOW_SIZE),
             color_delta_history: VecDeque::with_capacity(HISTORY_WINDOW_SIZE),
-            hue_difference_history: VecDeque::with_capacity(HISTORY_WINDOW_SIZE),
+            delta_hue_history: VecDeque::with_capacity(HISTORY_WINDOW_SIZE),
             mean_luminance_delta: 0.0,
             std_dev_luminance_delta: 0.0,
             mean_color_delta: 0.0,
             std_dev_color_delta: 0.0,
-            mean_hue_difference: 0.0,
-            std_dev_hue_difference: 0.0,
+            mean_delta_hue: 0.0,
+            std_dev_delta_hue: 0.0,
             status: ChunkStatus::Learning,
         }
     }
@@ -119,11 +119,11 @@ impl SmartChunk {
 
             let new_lum_delta = smart_new.delta_luminance(&smart_prev);
             let new_col_delta = smart_new.delta_color(&smart_prev);
-            let new_hue_diff = smart_new.hue_difference(&smart_prev);
+            let new_hue_diff = smart_new.delta_hue(&smart_prev);
 
             Self::update_history_generic(&mut self.luminance_delta_history, new_lum_delta);
             Self::update_history_generic(&mut self.color_delta_history, new_col_delta as f64);
-            Self::update_history_generic(&mut self.hue_difference_history, new_hue_diff);
+            Self::update_history_generic(&mut self.delta_hue_history, new_hue_diff);
 
             if self.luminance_delta_history.len() >= HISTORY_WINDOW_SIZE {
                 self.recalculate_statistics();
@@ -146,8 +146,8 @@ impl SmartChunk {
             Self::calculate_stats_for_history(&self.luminance_delta_history);
         (self.mean_color_delta, self.std_dev_color_delta) =
             Self::calculate_stats_for_history(&self.color_delta_history);
-        (self.mean_hue_difference, self.std_dev_hue_difference) =
-            Self::calculate_stats_for_history(&self.hue_difference_history);
+        (self.mean_delta_hue, self.std_dev_delta_hue) =
+            Self::calculate_stats_for_history(&self.delta_hue_history);
     }
 
     fn calculate_stats_for_history(history: &VecDeque<f64>) -> (f64, f64) {
@@ -183,8 +183,8 @@ impl SmartChunk {
             );
             let hue_score = Self::calculate_significance_score(
                 new_hue_diff,
-                self.mean_hue_difference,
-                self.std_dev_hue_difference,
+                self.mean_delta_hue,
+                self.std_dev_delta_hue,
             );
 
             self.status = ChunkStatus::AnomalousEvent(AnomalyDetails {
