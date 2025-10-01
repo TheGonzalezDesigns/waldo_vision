@@ -5,13 +5,13 @@
 // and quantify the difference between them in various meaningful ways.
 //
 // Key architectural principles:
-// 1.  **Comparative Analysis**: All core methods (`delta_luminance`, `hue_difference`)
+// 1.  **Comparative Analysis**: All core methods (`delta_luminance`, `delta_hue`)
 //     take another pixel as input. A `SmartPixel` is meaningless on its own; its value
 //     is in calculating relationships.
 // 2.  **Multiple "Lenses"**: It provides different ways to measure "difference," as each
 //     is useful for a different task.
 //     - `delta_luminance`: Best for robust motion detection (heat map).
-//     - `hue_difference`: Best for creating color-based signatures (object ID).
+//     - `delta_hue`: Best for creating color-based signatures (object ID).
 //     - `delta_color`: A fast, low-cost alternative for rough difference.
 // 3.  **Optimization**: It pre-calculates and caches values like `sum` and `luminance`
 //     in its constructor. This is a performance optimization for one-to-many comparisons,
@@ -22,7 +22,7 @@ pub mod smart_pixel {
 
     pub type ColorDelta = u16;
     pub type LuminanceDelta = f64;
-    pub type HueDifference = f64;
+    pub type HueDelta = f64;
 
     /// An analytical tool that wraps a `Pixel` to provide optimized comparison methods.
     pub struct SmartPixel {
@@ -51,7 +51,7 @@ pub mod smart_pixel {
             (self.luminance - other.luminance).abs()
         }
 
-        pub fn hue_difference(&self, other: &SmartPixel) -> HueDifference {
+        pub fn delta_hue(&self, other: &SmartPixel) -> HueDelta {
             let (r1, g1, b1) = self.pixel.color_ratios();
             let (r2, g2, b2) = other.pixel.color_ratios();
 
