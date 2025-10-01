@@ -7,7 +7,7 @@
 use crate::core_modules::blob_detector::blob_detector;
 use crate::core_modules::grid_manager::GridManager;
 use crate::core_modules::moment::SceneManager;
-use crate::core_modules::smart_blob::SmartBlob;
+use crate::core_modules::blob::Blob;
 use std::collections::VecDeque;
 
 // Re-export key data structures for the public API.
@@ -146,7 +146,7 @@ impl VisionPipeline {
         }
     }
 
-    fn filter_blobs(&mut self, blobs: Vec<SmartBlob>) -> Vec<SmartBlob> {
+    fn filter_blobs(&mut self, blobs: Vec<Blob>) -> Vec<Blob> {
         let (mean, std_dev) = {
             if self.blob_size_history.is_empty() {
                 (0.0, 0.0)
