@@ -21,12 +21,12 @@
 //     natural, gradient-based edge of the motion.
 // 4.  **Data Aggregation**: Once a blob is fully grown, its high-level properties
 //     (bounding box, center of mass, average anomaly scores) are calculated and
-//     packaged into a `SmartBlob` struct.
+//     packaged into a `Blob` struct.
 // 5.  **Stateless Utility**: The `BlobDetector` is a stateless utility. Its `find_blobs`
 //     function takes a status map for a single frame and produces a list of blobs
 //     for that same frame. It has no memory of previous frames.
 
-use crate::core_modules::smart_blob::{Point, SmartBlob};
+use crate::core_modules::blob::{Point, Blob};
 use crate::core_modules::smart_chunk::{AnomalyDetails, ChunkStatus};
 
 pub mod blob_detector {
@@ -38,7 +38,7 @@ pub mod blob_detector {
         status_map: &[ChunkStatus],
         grid_width: u32,
         grid_height: u32,
-    ) -> Vec<SmartBlob> {
+    ) -> Vec<Blob> {
         // --- 1. Heatmap Generation ---
         // Convert the flat Vec<ChunkStatus> into a 2D grid of f64 heat values.
         // The heat is determined by the luminance_score of an AnomalousEvent.
@@ -102,7 +102,7 @@ pub mod blob_detector {
         // For each peak, grow a region and create a blob.
         // A `visited` grid is crucial to ensure we don't process the same chunk twice.
         let mut visited = vec![vec![false; grid_width as usize]; grid_height as usize];
-        let mut blobs: Vec<SmartBlob> = Vec::new();
+        let mut blobs: Vec<Blob> = Vec::new();
         let mut blob_id_counter = 0;
 
         for peak in peaks {
@@ -139,7 +139,7 @@ pub mod blob_detector {
         blob_id: u64,
         status_map: &[ChunkStatus],
         grid_width: u32,
-    ) -> SmartBlob {
+    ) -> Blob {
         let mut blob_chunks: Vec<Point> = Vec::new();
         let mut queue: Vec<Point> = vec![peak];
         visited[peak.y as usize][peak.x as usize] = true;
@@ -202,7 +202,7 @@ pub mod blob_detector {
         }
 
         let num_chunks = blob_chunks.len();
-        SmartBlob {
+        Blob {
             id: blob_id,
             bounding_box: (Point { x: min_x, y: min_y }, Point { x: max_x, y: max_y }),
             chunk_coords: blob_chunks,
