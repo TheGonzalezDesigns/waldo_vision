@@ -1,3 +1,6 @@
 /target
 /assets
 docs/
+*.rse
+*.png
+*.jpg
