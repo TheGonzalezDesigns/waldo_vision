@@ -124,4 +124,93 @@ pub mod gaussian_engine {
         }
         out
     }
+
+    // ========================= Depth Cues (HSV-based) =========================
+
+    /// Extract Value (HSV) plane from Pixels in [0,1].
+    /// Uses `Pixel::value_hsv()` which is normalized sRGB by default,
+    /// or linear RGB when the `accurate` feature is enabled.
+    pub fn value_plane_from_pixels(pixels: &[Pixel]) -> Vec<f32> {
+        pixels.iter().map(|p| p.value_hsv() as f32).collect()
+    }
+
+    /// Extract Saturation (HSV) plane from Pixels in [0,1].
+    pub fn saturation_plane_from_pixels(pixels: &[Pixel]) -> Vec<f32> {
+        pixels
+            .iter()
+            .map(|p| p.saturation_hsv() as f32)
+            .collect()
+    }
+
+    /// Compute Hue Bias plane in [0,1] favoring cool hues (≈240°) as "far".
+    /// Mapping: B_H = 0.5 * (1 + cos(h − 240°)), where h is in radians.
+    pub fn hue_bias_plane_from_pixels(pixels: &[Pixel]) -> Vec<f32> {
+        const H_COOL_DEG: f64 = 240.0;
+        let target = H_COOL_DEG.to_radians();
+        pixels
+            .iter()
+            .map(|p| {
+                let h_rad = p.hue().to_radians();
+                let val = 0.5 * (1.0 + (h_rad - target).cos());
+                val.max(0.0).min(1.0) as f32
+            })
+            .collect()
+    }
+
+    /// Local Brightness Contrast C_V in [0,1].
+    /// C_V high when pixel is darker than local mean (recedes),
+    /// low when pixel is brighter than local mean (advances).
+    pub fn local_brightness_contrast(v: &[f32], v_bar: &[f32], epsilon: f32) -> Vec<f32> {
+        assert_eq!(v.len(), v_bar.len());
+        let mut out = Vec::with_capacity(v.len());
+        for i in 0..v.len() {
+            let denom = v_bar[i].max(epsilon);
+            let raw = (v_bar[i] - v[i]) / denom;
+            out.push(raw.max(0.0).min(1.0));
+        }
+        out
+    }
+
+    /// Combine depth cues into a single depth score in [0,1].
+    pub fn combine_depth(
+        c_v: &[f32], // Local Brightness Contrast [0,1]
+        s_f: &[f32], // Desaturation far-ness [0,1] (1 - S)
+        b_h: &[f32], // Hue bias [0,1]
+        w_l: f32,
+        w_s: f32,
+        w_h: f32,
+    ) -> Vec<f32> {
+        let n = c_v.len();
+        assert_eq!(n, s_f.len());
+        assert_eq!(n, b_h.len());
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let d = w_l * c_v[i] + w_s * s_f[i] + w_h * b_h[i];
+            out.push(d.max(0.0).min(1.0));
+        }
+        out
+    }
+
+    /// High-level: compute a per-pixel depth score from Pixels using HSV-derived cues.
+    /// - `sigma`: Gaussian sigma for local mean on Value plane
+    /// - `epsilon`: small positive to stabilize normalization (e.g., 1e-3)
+    /// - `weights`: (w_l, w_s, w_h) for (C_V, 1-S, Hue Bias)
+    pub fn depth_from_pixels_hsv(
+        pixels: &[Pixel],
+        w: usize,
+        h: usize,
+        sigma: f32,
+        epsilon: f32,
+        weights: (f32, f32, f32),
+    ) -> Vec<f32> {
+        let v = value_plane_from_pixels(pixels);
+        let s = saturation_plane_from_pixels(pixels);
+        let b_h = hue_bias_plane_from_pixels(pixels);
+
+        let v_bar = gaussian_blur_plane(&v, w, h, sigma);
+        let c_v = local_brightness_contrast(&v, &v_bar, epsilon);
+        let s_f: Vec<f32> = s.into_iter().map(|sv| 1.0 - sv).collect();
+        let (w_l, w_s, w_h) = weights;
+        combine_depth(&c_v, &s_f, &b_h, w_l, w_s, w_h)
+    }
 }
