@@ -4,7 +4,7 @@
 // continuous stream of tracked object data into a discrete, historical narrative of
 // events, called "Moments."
 
-use crate::core_modules::smart_blob::SmartBlob;
+use crate::core_modules::blob::Blob;
 use crate::core_modules::tracker::{TrackedBlob, TrackedState, Tracker};
 use crate::pipeline::PipelineConfig;
 use std::collections::HashSet;
@@ -16,7 +16,7 @@ pub struct Moment {
     pub start_frame: u64,
     pub end_frame: u64,
     pub path: Vec<(f64, f64)>,
-    pub blob_history: Vec<SmartBlob>,
+    pub blob_history: Vec<Blob>,
     pub is_active: bool,
     pub is_significant: bool,
 }
@@ -65,7 +65,7 @@ impl SceneManager {
 
     pub fn update(
         &mut self,
-        blobs: Vec<SmartBlob>,
+        blobs: Vec<Blob>,
         config: &PipelineConfig,
     ) -> (Vec<Moment>, Vec<Moment>) {
         self.frame_count += 1;
