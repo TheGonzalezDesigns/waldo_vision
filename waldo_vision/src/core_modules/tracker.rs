@@ -1,7 +1,7 @@
 // THEORY:
 // The `tracker` module is the heart of the Behavioral Analysis Layer. Its primary
 // responsibility is to add the concept of "memory" or "object permanence" to the
-// vision system. It takes the stateless list of `SmartBlob`s from a single frame
+// vision system. It takes the stateless list of `Blob`s from a single frame
 // and associates them with the objects it was tracking from previous frames.
 //
 // This module solves the "data association problem" with a sophisticated, multi-stage
@@ -10,7 +10,7 @@
 // Key architectural principles:
 // 1.  **Hierarchical Clustering**: Before tracking, it performs a "merge and absorb"
 //     pass on the raw blobs. It uses spatial proximity and signature similarity
-//     (`hue_difference`) to merge fragmented blobs into single, coherent objects.
+//     (`delta_hue`) to merge fragmented blobs into single, coherent objects.
 //     This solves the problem of a single real-world object being detected as
 //     multiple, separate blobs.
 // 2.  **Stateful Tracking**: It uses a state machine (`TrackedState`) for each
@@ -24,7 +24,7 @@
 // 4.  **Lifecycle Management**: It manages the birth, life, and death of a track,
 //     handling occlusion and re-acquisition gracefully.
 
-use crate::core_modules::smart_blob::SmartBlob;
+use crate::core_modules::blob::Blob;
 use crate::core_modules::smart_chunk::AnomalyDetails;
 use crate::pipeline::PipelineConfig;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -47,7 +47,7 @@ pub enum TrackedState {
 pub struct TrackedBlob {
     pub id: u64,
     pub state: TrackedState,
-    pub latest_blob: SmartBlob,
+    pub latest_blob: Blob,
     pub position_history: VecDeque<(f64, f64)>,
     pub size_history: VecDeque<usize>,
     pub velocity_history: VecDeque<(f64, f64)>,
@@ -59,7 +59,7 @@ pub struct TrackedBlob {
 }
 
 impl TrackedBlob {
-    fn new(id: u64, blob: SmartBlob) -> Self {
+    fn new(id: u64, blob: Blob) -> Self {
         let mut position_history = VecDeque::with_capacity(HISTORY_SIZE);
         position_history.push_back(blob.center_of_mass);
         let mut size_history = VecDeque::with_capacity(HISTORY_SIZE);
@@ -79,7 +79,7 @@ impl TrackedBlob {
         }
     }
 
-    fn update(&mut self, blob: SmartBlob) {
+    fn update(&mut self, blob: Blob) {
         self.latest_blob = blob;
         self.age += 1;
         self.frames_since_seen = 0;
@@ -133,7 +133,7 @@ impl Tracker {
 
     pub fn update(
         &mut self,
-        new_blobs: Vec<SmartBlob>,
+        new_blobs: Vec<Blob>,
         config: &PipelineConfig,
     ) -> &Vec<TrackedBlob> {
         let coherent_blobs = self.merge_fragmented_blobs(new_blobs);
@@ -174,16 +174,16 @@ impl Tracker {
         &self.tracked_blobs
     }
 
-    fn merge_fragmented_blobs(&self, blobs: Vec<SmartBlob>) -> Vec<SmartBlob> {
+    fn merge_fragmented_blobs(&self, blobs: Vec<Blob>) -> Vec<Blob> {
         blobs // Placeholder for future enhancement
     }
 
     fn match_blobs(
         &self,
-        blobs: Vec<SmartBlob>,
-    ) -> (Vec<(usize, usize)>, HashMap<usize, SmartBlob>) {
+        blobs: Vec<Blob>,
+    ) -> (Vec<(usize, usize)>, HashMap<usize, Blob>) {
         let mut matches = Vec::new();
-        let unmatched_blobs: HashMap<usize, SmartBlob> = blobs.into_iter().enumerate().collect();
+        let unmatched_blobs: HashMap<usize, Blob> = blobs.into_iter().enumerate().collect();
         let mut used_blob_indices = HashSet::new();
 
         for (i, tracked_blob) in self.tracked_blobs.iter().enumerate() {
