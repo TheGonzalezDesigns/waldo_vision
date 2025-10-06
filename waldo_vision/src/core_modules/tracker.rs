@@ -131,11 +131,7 @@ impl Tracker {
         }
     }
 
-    pub fn update(
-        &mut self,
-        new_blobs: Vec<Blob>,
-        config: &PipelineConfig,
-    ) -> &Vec<TrackedBlob> {
+    pub fn update(&mut self, new_blobs: Vec<Blob>, config: &PipelineConfig) -> &Vec<TrackedBlob> {
         let coherent_blobs = self.merge_fragmented_blobs(new_blobs);
         let (matches, unmatched_blobs_map) = self.match_blobs(coherent_blobs);
         let mut unmatched_blobs = unmatched_blobs_map;
@@ -178,10 +174,7 @@ impl Tracker {
         blobs // Placeholder for future enhancement
     }
 
-    fn match_blobs(
-        &self,
-        blobs: Vec<Blob>,
-    ) -> (Vec<(usize, usize)>, HashMap<usize, Blob>) {
+    fn match_blobs(&self, blobs: Vec<Blob>) -> (Vec<(usize, usize)>, HashMap<usize, Blob>) {
         let mut matches = Vec::new();
         let unmatched_blobs: HashMap<usize, Blob> = blobs.into_iter().enumerate().collect();
         let mut used_blob_indices = HashSet::new();
