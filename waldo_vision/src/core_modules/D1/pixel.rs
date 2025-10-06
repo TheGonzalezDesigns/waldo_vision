@@ -690,11 +690,15 @@ pub mod pixel {
     pub struct Pixels(pub Vec<Pixel>);
 
     impl From<Pixels> for Vec<Pixel> {
-        fn from(pv: Pixels) -> Self { pv.0 }
+        fn from(pv: Pixels) -> Self {
+            pv.0
+        }
     }
 
     impl Pixels {
-        pub fn into_inner(self) -> Vec<Pixel> { self.0 }
+        pub fn into_inner(self) -> Vec<Pixel> {
+            self.0
+        }
     }
 
     /// Convert RGBA bytes to `Pixels` with validation.
@@ -707,7 +711,9 @@ pub mod pixel {
             if bytes.len() % CHANNELS != 0 {
                 return Err("byte buffer length must be a multiple of 4 (RGBA)");
             }
-            Ok(Pixels(bytes.chunks_exact(CHANNELS).map(Pixel::from).collect()))
+            Ok(Pixels(
+                bytes.chunks_exact(CHANNELS).map(Pixel::from).collect(),
+            ))
         }
     }
 
