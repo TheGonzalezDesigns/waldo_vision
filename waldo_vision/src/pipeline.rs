@@ -4,10 +4,10 @@
 // Its purpose is to provide a clean and user-friendly entry point for processing
 // image data and receiving high-level, actionable reports about significant events.
 
+use crate::core_modules::blob::Blob;
 use crate::core_modules::blob_detector::blob_detector;
 use crate::core_modules::grid_manager::GridManager;
 use crate::core_modules::moment::SceneManager;
-use crate::core_modules::blob::Blob;
 use std::collections::VecDeque;
 
 // Re-export key data structures for the public API.
