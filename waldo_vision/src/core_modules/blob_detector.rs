@@ -26,7 +26,7 @@
 //     function takes a status map for a single frame and produces a list of blobs
 //     for that same frame. It has no memory of previous frames.
 
-use crate::core_modules::blob::{Point, Blob};
+use crate::core_modules::blob::{Blob, Point};
 use crate::core_modules::smart_chunk::{AnomalyDetails, ChunkStatus};
 
 pub mod blob_detector {
@@ -34,11 +34,7 @@ pub mod blob_detector {
 
     /// The main function of the spatial analysis layer.
     /// Takes a status map and identifies all coherent blobs of anomalous activity.
-    pub fn find_blobs(
-        status_map: &[ChunkStatus],
-        grid_width: u32,
-        grid_height: u32,
-    ) -> Vec<Blob> {
+    pub fn find_blobs(status_map: &[ChunkStatus], grid_width: u32, grid_height: u32) -> Vec<Blob> {
         // --- 1. Heatmap Generation ---
         // Convert the flat Vec<ChunkStatus> into a 2D grid of f64 heat values.
         // The heat is determined by the luminance_score of an AnomalousEvent.
