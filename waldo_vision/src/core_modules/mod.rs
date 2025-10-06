@@ -1,12 +1,12 @@
 pub mod D1;
 pub mod D2;
 pub mod D3;
+pub mod blob;
 pub mod blob_detector;
 pub mod chunk;
+pub mod gaussian_engine;
 pub mod grid_manager;
 pub mod moment;
-pub mod blob;
 pub mod smart_chunk;
 pub mod tracker;
 pub mod utils;
-pub mod gaussian_engine;
