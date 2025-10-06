@@ -9,8 +9,8 @@ fn main() {
     // Args: [input_path] [sigma] [output_path]
     let args: Vec<String> = env::args().collect();
 
-    let default_input = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../assets/marilyn_monroe.jpg");
+    let default_input =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/marilyn_monroe.jpg");
     let input_path = args.get(1).map(PathBuf::from).unwrap_or(default_input);
 
     let sigma: f32 = args
@@ -18,8 +18,8 @@ fn main() {
         .and_then(|s| s.parse::<f32>().ok())
         .unwrap_or(3.0);
 
-    let default_output = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../assets/marilyn_monroe_gaussian.png");
+    let default_output =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/marilyn_monroe_gaussian.png");
     let output_path = args.get(3).map(PathBuf::from).unwrap_or(default_output);
 
     println!("Loading image: {}", input_path.display());
