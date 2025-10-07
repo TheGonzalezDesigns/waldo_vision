@@ -17,6 +17,8 @@ web = [
     "dep:futures-util",
     "dep:async-stream",
 ]
+# Forward the waldo_vision `accurate` feature so downstream callers can enable it
+accurate = ["waldo_vision/accurate"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
