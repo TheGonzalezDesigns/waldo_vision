@@ -12,4 +12,7 @@ waldo_vision_visualizer = { path = "../waldo_vision_visualizer", optional = true
 
 [features]
 default = []
+# Enable web server integration via the visualizer crate
 web = ["waldo_vision_visualizer/web"]
+# Forward the waldo_vision `accurate` feature so callers can enable it
+accurate = ["waldo_vision/accurate"]
