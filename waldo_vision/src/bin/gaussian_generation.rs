@@ -2,8 +2,8 @@ use std::env;
 use std::path::PathBuf;
 
 use image::{ImageBuffer, Rgba};
-use waldo_vision::core_modules::D1::pixel::pixel::{Pixel, Pixels};
-use waldo_vision::core_modules::gaussian_engine::gaussian_engine::gaussian_blur_pixels_rgba_bytes;
+use waldo_vision::core_modules::data::pixel::pixel::{Pixel, Pixels};
+use waldo_vision::core_modules::pooling::gaussian_engine::gaussian_engine::gaussian_blur_pixels_rgba_bytes;
 
 fn main() {
     // Args: [input_path] [sigma] [output_path]
