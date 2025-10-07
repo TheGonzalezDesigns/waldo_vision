@@ -25,7 +25,7 @@
 //     handling occlusion and re-acquisition gracefully.
 
 use crate::core_modules::blob::Blob;
-use crate::core_modules::smart_chunk::AnomalyDetails;
+use crate::core_modules::temporal::smart_chunk::AnomalyDetails;
 use crate::pipeline::PipelineConfig;
 use std::collections::{HashMap, HashSet, VecDeque};
 
