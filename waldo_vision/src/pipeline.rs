@@ -6,13 +6,13 @@
 
 use crate::core_modules::blob::Blob;
 use crate::core_modules::blob_detector::blob_detector;
-use crate::core_modules::grid_manager::GridManager;
 use crate::core_modules::moment::SceneManager;
+use crate::core_modules::temporal::grid_manager::GridManager;
 use std::collections::VecDeque;
 
 // Re-export key data structures for the public API.
 pub use crate::core_modules::moment::Moment;
-pub use crate::core_modules::smart_chunk::{AnomalyDetails, ChunkStatus};
+pub use crate::core_modules::temporal::smart_chunk::{AnomalyDetails, ChunkStatus};
 pub use crate::core_modules::tracker::{TrackedBlob, TrackedState};
 
 const BLOB_SIZE_HISTORY_LENGTH: usize = 100;
@@ -96,6 +96,12 @@ impl VisionPipeline {
             scene_state: SceneState::Calibrating,
             frames_in_current_state: 0,
         }
+    }
+
+    /// Switch GridManager to Gaussian spatial pooling for per-chunk observations.
+    /// Uses sigma ≈ 0.5 * chunk_width on linear RGB planes.
+    pub fn enable_gaussian_pooling(&mut self) {
+        self.grid_manager.enable_gaussian_pooling();
     }
 
     pub fn process_frame(&mut self, frame_buffer: &[u8]) -> FrameAnalysis {
