@@ -1,5 +1,5 @@
 pub mod image_converter {
-    use crate::core_modules::D1::pixel::pixel::*;
+    use crate::core_modules::data::pixel::pixel::*;
 
     pub fn convert_image(img: image::DynamicImage) {
         let rgba = img.to_rgba8();
