@@ -266,3 +266,63 @@ pub fn chromaticity_xy_from_linear(r: f64, g: f64, b: f64) -> (f64, f64) {
         (x / s, y / s)
     }
 }
+
+// ---------------------------- CIELAB helpers ----------------------------
+
+#[inline]
+pub fn lab_f(t: f64) -> f64 {
+    const DELTA: f64 = 6.0 / 29.0;
+    const DELTA_CUBED: f64 = DELTA * DELTA * DELTA;
+    if t > DELTA_CUBED {
+        t.powf(1.0 / 3.0)
+    } else {
+        (t / (3.0 * DELTA * DELTA)) + (4.0 / 29.0)
+    }
+}
+
+#[inline]
+pub fn rgb_linear_to_lab(r_lin: f64, g_lin: f64, b_lin: f64) -> (f64, f64, f64) {
+    // sRGB D65 linear RGB to XYZ
+    let x = 0.412_456_4_f64 * r_lin + 0.357_576_1_f64 * g_lin + 0.180_437_5_f64 * b_lin;
+    let y = 0.212_672_9_f64 * r_lin + 0.715_152_2_f64 * g_lin + 0.072_175_0_f64 * b_lin;
+    let z = 0.019_333_9_f64 * r_lin + 0.119_192_0_f64 * g_lin + 0.950_304_1_f64 * b_lin;
+
+    // Reference white (D65)
+    let x_n = 0.950_47_f64;
+    let y_n = 1.000_00_f64;
+    let z_n = 1.088_83_f64;
+
+    let fx = lab_f(x / x_n);
+    let fy = lab_f(y / y_n);
+    let fz = lab_f(z / z_n);
+
+    let l_star = 116.0 * fy - 16.0;
+    let a_star = 500.0 * (fx - fy);
+    let b_star = 200.0 * (fy - fz);
+    (l_star, a_star, b_star)
+}
+
+#[inline]
+pub fn lab_lightness_normalized(l_star: f64) -> f64 {
+    (l_star / 100.0).clamp(0.0, 1.0)
+}
+
+#[inline]
+pub fn lab_chroma(a_star: f64, b_star: f64) -> f64 {
+    (a_star * a_star + b_star * b_star).sqrt()
+}
+
+#[inline]
+pub fn lab_chroma_normalized(a_star: f64, b_star: f64) -> f64 {
+    (lab_chroma(a_star, b_star) / 100.0).clamp(0.0, 1.0)
+}
+
+#[inline]
+pub fn lab_hue_deg(a_star: f64, b_star: f64) -> f64 {
+    let h = b_star.atan2(a_star);
+    let mut deg = h.to_degrees();
+    if deg < 0.0 {
+        deg += 360.0;
+    }
+    deg
+}
