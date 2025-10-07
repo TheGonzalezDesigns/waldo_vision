@@ -27,7 +27,7 @@
 //     for that same frame. It has no memory of previous frames.
 
 use crate::core_modules::blob::{Blob, Point};
-use crate::core_modules::smart_chunk::{AnomalyDetails, ChunkStatus};
+use crate::core_modules::temporal::smart_chunk::{AnomalyDetails, ChunkStatus};
 
 pub mod blob_detector {
     use super::*; // Make structs from parent module available.
