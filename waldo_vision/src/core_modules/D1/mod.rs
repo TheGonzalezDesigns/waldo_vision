@@ -1,1 +1,1 @@
-pub mod pixel;
+pub use crate::core_modules::data::pixel;
