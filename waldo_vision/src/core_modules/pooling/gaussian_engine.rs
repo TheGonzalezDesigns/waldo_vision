@@ -208,6 +208,148 @@ pub mod gaussian_engine {
         combine_depth(&c_v, &s_f, &b_h, w_l, w_s, w_h)
     }
 
+    // ========================= CIELAB-based Depth (Accurate) =========================
+
+    #[cfg(feature = "accurate")]
+    fn f_lab(t: f64) -> f64 {
+        // CIE Lab f(t) helper with (6/29)^3 break point
+        const DELTA: f64 = 6.0 / 29.0; // ≈0.2068966
+        const DELTA_CUBED: f64 = DELTA * DELTA * DELTA;
+        if t > DELTA_CUBED {
+            t.powf(1.0 / 3.0)
+        } else {
+            (t / (3.0 * DELTA * DELTA)) + (4.0 / 29.0)
+        }
+    }
+
+    #[cfg(feature = "accurate")]
+    fn rgb_linear_to_lab(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+        // sRGB D65 linear RGB to XYZ
+        let x = 0.412_456_4_f64 * r + 0.357_576_1_f64 * g + 0.180_437_5_f64 * b;
+        let y = 0.212_672_9_f64 * r + 0.715_152_2_f64 * g + 0.072_175_0_f64 * b;
+        let z = 0.019_333_9_f64 * r + 0.119_192_0_f64 * g + 0.950_304_1_f64 * b;
+
+        // Reference white (D65)
+        let x_n = 0.950_47_f64;
+        let y_n = 1.000_00_f64;
+        let z_n = 1.088_83_f64;
+
+        let fx = f_lab(x / x_n);
+        let fy = f_lab(y / y_n);
+        let fz = f_lab(z / z_n);
+
+        let l_star = 116.0 * fy - 16.0; // 0..100 typically
+        let a_star = 500.0 * (fx - fy);
+        let b_star = 200.0 * (fy - fz);
+        (l_star, a_star, b_star)
+    }
+
+    /// Compute a depth score from Pixels using CIELAB-derived cues (Accurate mode).
+    /// D = w_L * C_L + w_S * (1 - C*_norm) + w_H * B_H, clamped to [0,1].
+    /// - C_L = clip((L̄* - L*) / 100, 0, 1)
+    /// - C*_norm uses per-frame max chroma as normalization (robust percentile recommended; max used here)
+    /// - B_H = 0.5 * (1 + cos(h - h_blue)), h_blue ≈ -π/2 (blue direction in Lab)
+    #[cfg(feature = "accurate")]
+    pub fn depth_from_pixels_lab(
+        pixels: &[Pixel],
+        w: usize,
+        h: usize,
+        sigma: f32,
+        weights: (f32, f32, f32),
+    ) -> Vec<f32> {
+        let n = pixels.len();
+        assert_eq!(n, w * h);
+
+        // Build L*, a*, b* planes from linear RGB
+        let mut l_plane = Vec::with_capacity(n);
+        let mut a_plane = Vec::with_capacity(n);
+        let mut b_plane = Vec::with_capacity(n);
+        l_plane.resize(n, 0.0);
+        a_plane.resize(n, 0.0);
+        b_plane.resize(n, 0.0);
+
+        for (i, p) in pixels.iter().enumerate() {
+            let (l, a, b) = rgb_linear_to_lab(
+                p.red_linear as f64,
+                p.green_linear as f64,
+                p.blue_linear as f64,
+            );
+            l_plane[i] = (l / 100.0).clamp(0.0, 1.0) as f32; // normalize to 0..1 for numeric stability
+            a_plane[i] = a as f32;
+            b_plane[i] = b as f32;
+        }
+
+        // Local mean of L* (normalized 0..1) via Gaussian
+        let l_bar = yvv_gaussian_blur_plane(&l_plane, w, h, sigma);
+
+        // C_L = clip((L̄* - L*) / 1.0, 0, 1) because l_plane is normalized by 100
+        let mut c_l = Vec::with_capacity(n);
+        for i in 0..n {
+            let raw = (l_bar[i] - l_plane[i]) / 1.0; // already 0..1 normalized
+            c_l.push(raw.max(0.0).min(1.0));
+        }
+
+        // Chroma C* and normalized far-ness S_f = 1 - C*_norm
+        let mut c_star = Vec::with_capacity(n);
+        let mut c_max = 0.0f32;
+        for i in 0..n {
+            let a = a_plane[i] as f32;
+            let b = b_plane[i] as f32;
+            let c = (a * a + b * b).sqrt();
+            c_star.push(c);
+            if c > c_max {
+                c_max = c;
+            }
+        }
+        if c_max < 1e-6 {
+            c_max = 1.0;
+        }
+        let s_f: Vec<f32> = c_star
+            .into_iter()
+            .map(|c| (1.0 - (c / c_max).min(1.0)))
+            .collect();
+
+        // Hue bias in Lab from hue angle h = atan2(b*, a*), with blue at -π/2.
+        let h_blue: f64 = -std::f64::consts::FRAC_PI_2;
+        let mut b_h = Vec::with_capacity(n);
+        for i in 0..n {
+            let a = a_plane[i] as f64;
+            let b = b_plane[i] as f64;
+            let h = b.atan2(a);
+            let val = 0.5 * (1.0 + (h - h_blue).cos());
+            b_h.push(val.clamp(0.0, 1.0) as f32);
+        }
+
+        // Combine
+        let (w_l, w_s, w_h) = weights;
+        combine_depth(&c_l, &s_f, &b_h, w_l, w_s, w_h)
+    }
+
+    /// Convenience wrapper: depth-from-color choosing HSV (optimal) or Lab (accurate).
+    #[cfg(not(feature = "accurate"))]
+    pub fn depth_from_pixels(
+        pixels: &[Pixel],
+        w: usize,
+        h: usize,
+        sigma: f32,
+        epsilon: f32,
+        weights: (f32, f32, f32),
+    ) -> Vec<f32> {
+        depth_from_pixels_hsv(pixels, w, h, sigma, epsilon, weights)
+    }
+
+    #[cfg(feature = "accurate")]
+    pub fn depth_from_pixels(
+        pixels: &[Pixel],
+        w: usize,
+        h: usize,
+        sigma: f32,
+        _epsilon: f32,
+        weights: (f32, f32, f32),
+    ) -> Vec<f32> {
+        depth_from_pixels_lab(pixels, w, h, sigma, weights)
+    }
+
     // Parallel FIR helpers removed; runtime auto-parallelization is used in YvV path.
 
     // ========================= Fused Multi-Plane Blur =========================
