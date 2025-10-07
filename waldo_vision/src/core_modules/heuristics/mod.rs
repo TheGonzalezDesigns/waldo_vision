@@ -316,9 +316,10 @@ pub mod heuristics {
         fn evaluate(&self, context: &mut HeuristicContext) -> f64 {
             #[cfg(feature = "accurate")]
             {
-                use crate::core_modules::utils::color_ops::hue_from_linear_rgb_deg;
+                use crate::core_modules::utils::color_ops::{lab_hue_deg, rgb_linear_to_lab};
                 let (red, green, blue) = context.sample_blurred_linear_rgb_center(self.sigma);
-                return hue_from_linear_rgb_deg(red, green, blue);
+                let (_l, a, b) = rgb_linear_to_lab(red as f64, green as f64, blue as f64);
+                return lab_hue_deg(a, b);
             }
             #[cfg(not(feature = "accurate"))]
             {
@@ -408,9 +409,12 @@ pub mod heuristics {
         fn evaluate(&self, context: &mut HeuristicContext) -> f64 {
             #[cfg(feature = "accurate")]
             {
-                use crate::core_modules::utils::color_ops::chroma_from_linear;
+                use crate::core_modules::utils::color_ops::{
+                    lab_chroma_normalized, rgb_linear_to_lab,
+                };
                 let (red, green, blue) = context.sample_blurred_linear_rgb_center(self.sigma);
-                return chroma_from_linear(red as f64, green as f64, blue as f64);
+                let (_l, a, b) = rgb_linear_to_lab(red as f64, green as f64, blue as f64);
+                return lab_chroma_normalized(a, b);
             }
             #[cfg(not(feature = "accurate"))]
             {
@@ -543,9 +547,12 @@ pub mod heuristics {
         fn evaluate(&self, context: &mut HeuristicContext) -> f64 {
             #[cfg(feature = "accurate")]
             {
-                use crate::core_modules::utils::color_ops::colorfulness_from_linear;
+                use crate::core_modules::utils::color_ops::{
+                    lab_chroma_normalized, rgb_linear_to_lab,
+                };
                 let (red, green, blue) = context.sample_blurred_linear_rgb_center(self.sigma);
-                return colorfulness_from_linear(red as f64, green as f64, blue as f64);
+                let (_l, a, b) = rgb_linear_to_lab(red as f64, green as f64, blue as f64);
+                return lab_chroma_normalized(a, b);
             }
             #[cfg(not(feature = "accurate"))]
             {
