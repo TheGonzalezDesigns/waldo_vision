@@ -13,8 +13,16 @@ async fn main() -> anyhow::Result<()> {
         udp_port_end: None,
     };
     let (play_tx, mut _play_rx) = tokio::sync::watch::channel(false);
+    // Control handle is only used when the `web` feature is enabled
+    #[cfg(feature = "web")]
     let control = ControlHandle { play_tx };
+    #[cfg(not(feature = "web"))]
+    let _control = ControlHandle { play_tx };
 
+    // Call the appropriate start_server signature based on feature flag
+    #[cfg(feature = "web")]
+    let handle = start_server(bus, cfg, control).await?;
+    #[cfg(not(feature = "web"))]
     let handle = start_server(bus, cfg).await?;
     // Park forever
     handle.await.ok();
