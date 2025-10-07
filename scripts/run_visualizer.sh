@@ -34,6 +34,7 @@ Options (for start/restart):
   -r <range>  ICE UDP port range, e.g. 30000-30100 (default: ${DEFAULT_ICE_RANGE})
   --stream    Run server-only and accept WS ingest (default)
   --local     Run local file pipeline (visual_tester) and publish
+  --accurate  Build with waldo_vision's `accurate` feature enabled
 
 Examples:
   # Stream mode (server only, for Pi ingest)
@@ -66,7 +67,7 @@ is_running() {
 }
 
 start_server() {
-  local video="${1}" output="${2}" bind_addr="${3}" domain="${4}" nat_ip="${5}" ice_range="${6}" mode="${7}"
+  local video="${1}" output="${2}" bind_addr="${3}" domain="${4}" nat_ip="${5}" ice_range="${6}" mode="${7}" accurate_flag="${8:-0}"
 
   echo "[waldo] Stopping any existing instance…"
   $0 stop || true
@@ -78,9 +79,15 @@ start_server() {
   : "${nat_ip:=unset}"
   : "${ice_range:=${DEFAULT_ICE_RANGE}}"
 
+  # Compose feature list (always web; optionally accurate)
+  local FEATURES="web"
+  if [[ "${accurate_flag}" == "1" ]]; then
+    FEATURES+=",accurate"
+  fi
+
   if [[ "${mode}" == "local" ]]; then
-    echo "[waldo] Building visual_tester (release, web feature)…"
-    cargo build -q -p visual_tester --features web --release
+    echo "[waldo] Building visual_tester (release, features: ${FEATURES})…"
+    cargo build -q -p visual_tester --features "${FEATURES}" --release
     echo "[waldo] Starting LOCAL pipeline: bind=${bind_addr}, NAT_IP=${nat_ip}, ICE_RANGE=${ice_range}"
     (
       export WV_NAT_IP="${nat_ip}"
@@ -88,8 +95,8 @@ start_server() {
       exec target/release/visual_tester --serve "${bind_addr}" "${video}" "${output}"
     ) >"${LOG_FILE}" 2>&1 &
   else
-    echo "[waldo] Building standalone visualizer (release, web feature)…"
-    cargo build -q -p waldo_vision_visualizer --features web --bin standalone --release
+    echo "[waldo] Building standalone visualizer (release, features: ${FEATURES})…"
+    cargo build -q -p waldo_vision_visualizer --features "${FEATURES}" --bin standalone --release
     echo "[waldo] Starting STREAM server-only: bind=${bind_addr}, NAT_IP=${nat_ip}, ICE_RANGE=${ice_range}"
     (
       export WV_NAT_IP="${nat_ip}"
@@ -166,12 +173,14 @@ case "${cmd}" in
   start)
     VIDEO="${DEFAULT_VIDEO}"; OUTPUT="${DEFAULT_OUTPUT}"; BIND="${DEFAULT_BIND}"; DOMAIN="${DEFAULT_DOMAIN}"; NAT_IP="auto"; ICE_RANGE="${DEFAULT_ICE_RANGE}"
     MODE="stream" # default
+    ACCURATE=0
     # Prefilter long flags so getopts doesn't choke on them
     ARGS=()
     for a in "$@"; do
       case "$a" in
         --local) MODE="local" ;;
         --stream) MODE="stream" ;;
+        --accurate) ACCURATE=1 ;;
         *) ARGS+=("$a") ;;
       esac
     done
@@ -189,7 +198,7 @@ case "${cmd}" in
       esac
     done
     shift $((OPTIND-1)) || true
-    start_server "${VIDEO}" "${OUTPUT}" "${BIND}" "${DOMAIN}" "${NAT_IP}" "${ICE_RANGE}" "${MODE}"
+    start_server "${VIDEO}" "${OUTPUT}" "${BIND}" "${DOMAIN}" "${NAT_IP}" "${ICE_RANGE}" "${MODE}" "${ACCURATE}"
     ;;
   stop)
     stop_server
