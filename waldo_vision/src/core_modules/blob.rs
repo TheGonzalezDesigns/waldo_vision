@@ -22,7 +22,7 @@
 //     final architectural layer (Behavioral Analysis), which will track these
 //     blobs over time to create "Moments" and narratives.
 
-use crate::core_modules::smart_chunk::AnomalyDetails;
+use crate::core_modules::temporal::smart_chunk::AnomalyDetails;
 
 /// A simple struct to represent a 2D point or coordinate on the chunk grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
