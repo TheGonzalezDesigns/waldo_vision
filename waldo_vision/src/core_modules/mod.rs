@@ -3,10 +3,12 @@ pub mod D2;
 pub mod D3;
 pub mod blob;
 pub mod blob_detector;
-pub mod chunk;
-pub mod gaussian_engine;
-pub mod grid_manager;
 pub mod moment;
-pub mod smart_chunk;
 pub mod tracker;
 pub mod utils;
+
+// New layered structure
+pub mod data;
+pub mod heuristics;
+pub mod pooling;
+pub mod temporal;
