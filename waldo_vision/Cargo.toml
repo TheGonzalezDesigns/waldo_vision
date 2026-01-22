@@ -11,6 +11,7 @@ categories = ["computer-vision", "multimedia::video"]
 
 [dependencies]
 image = "0.25.6"
+intervaltree = "0.2.7"
 rayon = "1.11"
 
 [features]
