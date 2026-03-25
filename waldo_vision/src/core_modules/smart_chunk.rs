@@ -233,3 +233,98 @@ impl SmartChunk {
         (value - mean) / std_dev
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_chunk_with_color(r: u8, g: u8, b: u8) -> Chunk {
+        Chunk::new(1, 1, vec![Pixel::new(r, g, b, 255)])
+    }
+
+    #[test]
+    fn test_smart_chunk_initial_learning_state() {
+        let mut sc = SmartChunk::new(0, 0);
+        assert_eq!(sc.status, ChunkStatus::Learning);
+
+        // Feed it some frames
+        for _ in 0..5 {
+            sc.update(&create_chunk_with_color(100, 100, 100));
+            assert_eq!(sc.status, ChunkStatus::Learning);
+        }
+    }
+
+    #[test]
+    fn test_smart_chunk_transitions_to_stable() {
+        let mut sc = SmartChunk::new(0, 0);
+
+        // Feed it exactly enough frames to fill history (HISTORY_WINDOW_SIZE + 1)
+        // because the first frame doesn't create a delta.
+        for _ in 0..HISTORY_WINDOW_SIZE + 1 {
+            sc.update(&create_chunk_with_color(100, 100, 100));
+        }
+
+        // With zero change, it should be Stable
+        assert_eq!(sc.status, ChunkStatus::Stable);
+        assert_eq!(sc.mean_luminance_delta, 0.0);
+    }
+
+    #[test]
+    fn test_smart_chunk_detects_anomalous_event() {
+        let mut sc = SmartChunk::new(0, 0);
+
+        // 1. Establish a stable baseline
+        for _ in 0..HISTORY_WINDOW_SIZE + 1 {
+            sc.update(&create_chunk_with_color(100, 100, 100));
+        }
+        assert_eq!(sc.status, ChunkStatus::Stable);
+
+        // 2. Introduce a sudden, large change
+        sc.update(&create_chunk_with_color(200, 200, 200));
+
+        // It should now be anomalous because std_dev was 0, making any change above threshold significant.
+        if let ChunkStatus::AnomalousEvent(details) = &sc.status {
+            assert!(details.luminance_score > ANOMALY_THRESHOLD_STD_DEV);
+        } else {
+            panic!("Expected AnomalousEvent, got {:?}", sc.status);
+        }
+    }
+
+    #[test]
+    fn test_smart_chunk_predictable_motion() {
+        let mut sc = SmartChunk::new(0, 0);
+
+        // 1. Establish a history with variance
+        // Frames: 10, 20, 30, 40, ... (constant delta of 10)
+        for i in 1..=HISTORY_WINDOW_SIZE + 1 {
+            let val = (i * 10) as u8;
+            sc.update(&create_chunk_with_color(val, val, val));
+        }
+
+        // Mean delta should be 10, StdDev should be 0.
+        // Wait, if StdDev is 0, any change is "Anomalous" in the current implementation!
+        // So we need SOME variance in the deltas.
+
+        // Let's use deltas: 10, 11, 10, 11...
+        let mut sc = SmartChunk::new(0, 0);
+        let mut current_val: u32 = 10;
+        for i in 0..HISTORY_WINDOW_SIZE + 1 {
+            sc.update(&create_chunk_with_color(
+                current_val as u8,
+                current_val as u8,
+                current_val as u8,
+            ));
+            current_val += if i % 2 == 0 { 10 } else { 11 };
+        }
+
+        // New delta 10.5 (the mean) should be PredictableMotion.
+        // We'll use 10.
+        sc.update(&create_chunk_with_color(
+            current_val as u8,
+            current_val as u8,
+            current_val as u8,
+        ));
+
+        assert!(matches!(sc.status, ChunkStatus::PredictableMotion));
+    }
+}
