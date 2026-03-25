@@ -22,9 +22,7 @@
 
 use crate::core_modules::chunk::chunk::Chunk;
 use crate::core_modules::pixel::pixel::Pixel;
-use crate::core_modules::smart_pixel::smart_pixel::{
-    HueDifference, LuminanceDelta, SmartPixel,
-};
+use crate::core_modules::smart_pixel::smart_pixel::{HueDifference, LuminanceDelta, SmartPixel};
 use std::collections::VecDeque;
 
 use rand::distr::{Distribution, StandardUniform, Uniform};
@@ -78,7 +76,7 @@ impl Distribution<ChunkStatus> for StandardUniform {
             0 => ChunkStatus::Learning,
             1 => ChunkStatus::Stable,
             2 => ChunkStatus::PredictableMotion,
-            _ => ChunkStatus::AnomalousEvent(rng.sample(StandardUniform))
+            _ => ChunkStatus::AnomalousEvent(rng.sample(StandardUniform)),
         }
     }
 }
