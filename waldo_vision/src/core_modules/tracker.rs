@@ -298,3 +298,101 @@ where
     let values: Vec<f64> = data.iter().map(accessor).collect();
     calculate_scalar_stats(&values)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core_modules::smart_blob::Point;
+
+    fn create_mock_config() -> PipelineConfig {
+        PipelineConfig {
+            image_width: 100,
+            image_height: 100,
+            chunk_width: 10,
+            chunk_height: 10,
+            new_age_threshold: 5,
+            behavioral_anomaly_threshold: 3.0,
+            absolute_min_blob_size: 1,
+            blob_size_std_dev_filter: 2.0,
+            disturbance_entry_threshold: 5.0,
+            disturbance_exit_threshold: 2.0,
+            disturbance_confirmation_frames: 3,
+        }
+    }
+
+    fn create_mock_blob(id: u64, x: f64, y: f64) -> SmartBlob {
+        SmartBlob {
+            id,
+            bounding_box: (Point { x: 0, y: 0 }, Point { x: 1, y: 1 }),
+            chunk_coords: vec![],
+            size_in_chunks: 10,
+            average_anomaly: AnomalyDetails {
+                luminance_score: 5.0,
+                color_score: 5.0,
+                hue_score: 5.0,
+            },
+            center_of_mass: (x, y),
+        }
+    }
+
+    #[test]
+    fn test_tracked_blob_lifecycle() {
+        let blob = create_mock_blob(1, 10.0, 10.0);
+        let mut tracked = TrackedBlob::new(100, blob);
+        assert_eq!(tracked.state, TrackedState::New);
+
+        // Move it
+        let blob2 = create_mock_blob(2, 11.0, 11.0);
+        tracked.update(blob2);
+        assert_eq!(tracked.velocity, (1.0, 1.0));
+        assert_eq!(tracked.age, 2);
+    }
+
+    #[test]
+    fn test_tracker_update() {
+        let mut tracker = Tracker::new();
+        let config = create_mock_config();
+
+        let blob1 = create_mock_blob(1, 10.0, 10.0);
+        let tracked = tracker.update(vec![blob1], &config);
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].state, TrackedState::New);
+        let first_id = tracked[0].id;
+
+        let blob2 = create_mock_blob(2, 10.5, 10.5);
+        let tracked = tracker.update(vec![blob2], &config);
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].id, first_id);
+        assert_eq!(tracked[0].velocity, (0.5, 0.5));
+
+        let tracked = tracker.update(vec![], &config);
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].state, TrackedState::Lost);
+        assert_eq!(tracked[0].frames_since_seen, 1);
+
+        let blob3 = create_mock_blob(3, 11.0, 11.0);
+        let tracked = tracker.update(vec![blob3], &config);
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].id, first_id);
+        assert_eq!(tracked[0].state, TrackedState::New); // age still < threshold
+    }
+
+    #[test]
+    fn test_tracker_multiple_blobs() {
+        let mut tracker = Tracker::new();
+        let config = create_mock_config();
+
+        let b1 = create_mock_blob(1, 10.0, 10.0);
+        let b2 = create_mock_blob(2, 50.0, 50.0);
+        let tracked = tracker.update(vec![b1, b2], &config);
+        assert_eq!(tracked.len(), 2);
+
+        // Swap positions (too far to match)
+        let b3 = create_mock_blob(3, 50.0, 50.0);
+        let b4 = create_mock_blob(4, 10.0, 10.0);
+        let tracked = tracker.update(vec![b3, b4], &config);
+        assert_eq!(tracked.len(), 2);
+        // They should still match based on distance because 10.0 and 50.0 are far apart
+        // and they are close to their previous positions.
+    }
+}
