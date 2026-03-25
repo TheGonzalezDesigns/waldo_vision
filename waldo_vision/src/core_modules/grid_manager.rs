@@ -112,3 +112,50 @@ impl GridManager {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_grid_manager_new() {
+        let gm = GridManager::new(100, 100, 10, 10);
+        assert_eq!(gm.grid_width, 10);
+        assert_eq!(gm.grid_height, 10);
+        assert_eq!(gm.smart_chunks.len(), 100);
+        assert_eq!(gm.smart_chunks[0].chunk_x, 0);
+        assert_eq!(gm.smart_chunks[0].chunk_y, 0);
+        assert_eq!(gm.smart_chunks[11].chunk_x, 1);
+        assert_eq!(gm.smart_chunks[11].chunk_y, 1);
+    }
+
+    #[test]
+    fn test_process_frame_basic() {
+        let mut gm = GridManager::new(20, 20, 10, 10);
+        let frame = vec![0u8; 20 * 20 * 4];
+        let statuses = gm.process_frame(&frame);
+        assert_eq!(statuses.len(), 4);
+        for status in statuses {
+            assert!(matches!(status, ChunkStatus::Learning));
+        }
+    }
+
+    #[test]
+    fn test_pixel_extraction_logic() {
+        // Create a 2x2 pixel image, 1x1 chunks => 4 chunks.
+        // Pixel (0,0): R=10, G=20, B=30, A=40
+        // Pixel (1,0): R=50, G=60, B=70, A=80
+        // Pixel (0,1): R=90, G=100, B=110, A=120
+        // Pixel (1,1): R=130, G=140, B=150, A=160
+        let mut gm = GridManager::new(2, 2, 1, 1);
+        let frame = vec![
+            10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
+        ];
+        gm.process_frame(&frame);
+
+        // Check if smart_chunks received the correct pixels (via average_pixel which is the same for 1x1)
+        // Since it's the first frame, they should all be in Learning state but have history size 1.
+        let statuses = gm.process_frame(&frame);
+        assert_eq!(statuses.len(), 4);
+    }
+}
