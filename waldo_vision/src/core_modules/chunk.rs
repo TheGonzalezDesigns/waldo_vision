@@ -73,3 +73,43 @@ pub mod chunk {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::chunk::*;
+    use crate::core_modules::pixel::pixel::Pixel;
+
+    #[test]
+    fn test_chunk_new() {
+        let pixels = vec![Pixel::new(1, 2, 3, 4), Pixel::new(5, 6, 7, 8)];
+        let chunk = Chunk::new(2, 1, pixels.clone());
+        assert_eq!(chunk.width, 2);
+        assert_eq!(chunk.height, 1);
+        assert_eq!(chunk.pixels, pixels);
+    }
+
+    #[test]
+    fn test_average_pixel_empty() {
+        let chunk = Chunk::new(0, 0, vec![]);
+        assert_eq!(chunk.average_pixel(), Pixel::default());
+    }
+
+    #[test]
+    fn test_average_pixel() {
+        let pixels = vec![
+            Pixel::new(100, 100, 100, 255),
+            Pixel::new(200, 200, 200, 255),
+        ];
+        let chunk = Chunk::new(2, 1, pixels);
+        let avg = chunk.average_pixel();
+        assert_eq!(avg, Pixel::new(150, 150, 150, 255));
+    }
+
+    #[test]
+    fn test_average_pixel_rounding() {
+        let pixels = vec![Pixel::new(10, 10, 10, 255), Pixel::new(11, 11, 11, 255)];
+        let chunk = Chunk::new(2, 1, pixels);
+        let avg = chunk.average_pixel();
+        // (10 + 11) / 2 = 10.5 -> rounds down to 10 in integer division
+        assert_eq!(avg, Pixel::new(10, 10, 10, 255));
+    }
+}
