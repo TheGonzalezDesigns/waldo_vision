@@ -51,3 +51,36 @@ pub struct SmartBlob {
     /// This provides a more precise location of the "epicenter" of the motion.
     pub center_of_mass: (f64, f64),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_point_equality() {
+        let p1 = Point { x: 10, y: 20 };
+        let p2 = Point { x: 10, y: 20 };
+        let p3 = Point { x: 20, y: 10 };
+        assert_eq!(p1, p2);
+        assert_ne!(p1, p3);
+    }
+
+    #[test]
+    fn test_smart_blob_clone() {
+        let blob = SmartBlob {
+            id: 1,
+            bounding_box: (Point { x: 0, y: 0 }, Point { x: 10, y: 10 }),
+            chunk_coords: vec![Point { x: 5, y: 5 }],
+            size_in_chunks: 1,
+            average_anomaly: AnomalyDetails {
+                luminance_score: 1.0,
+                color_score: 2.0,
+                hue_score: 3.0,
+            },
+            center_of_mass: (5.0, 5.0),
+        };
+        let cloned = blob.clone();
+        assert_eq!(cloned.id, blob.id);
+        assert_eq!(cloned.chunk_coords, blob.chunk_coords);
+    }
+}
