@@ -132,7 +132,7 @@ pub mod blob_detector {
     const REGION_GROW_THRESHOLD: f64 = 1.0;
 
     /// Performs a breadth-first search (BFS) to find all connected chunks for a blob.
-    fn grow_blob_from_peak(
+    pub fn grow_blob_from_peak(
         peak: Point,
         heatmap: &[Vec<f64>],
         visited: &mut [Vec<bool>],
@@ -220,12 +220,12 @@ pub mod blob_detector {
 #[cfg(test)]
 mod test {
     use super::blob_detector::*;
-    use crate::core_modules::smart_chunk::{ChunkStatus, AnomalyDetails};
+    use crate::core_modules::smart_blob::Point;
+    use crate::core_modules::smart_chunk::{AnomalyDetails, ChunkStatus};
+    use ndarray::Array2;
     use rand::distr::StandardUniform;
     use rand::prelude::*;
     use rand::rng;
-    use ndarray::Array2;
-
 
     // Helper to create a specific anomalous event
     fn mock_anomaly(score: f64) -> ChunkStatus {
@@ -253,11 +253,11 @@ mod test {
                 let x = peak_x + dx;
                 let y = peak_y + dy;
                 let idx = (y * width + x) as usize;
-                
+
                 if dx == 0 && dy == 0 {
                     status_map[idx] = mock_anomaly(10.0); // peak
                 } else {
-                    status_map[idx] = mock_anomaly(5.0);  // body
+                    status_map[idx] = mock_anomaly(5.0); // body
                 }
             }
         }
@@ -265,10 +265,13 @@ mod test {
         let blobs = find_blobs(&status_map, width as u32, height as u32);
 
         assert_eq!(blobs.len(), 1, "Should find exactly one coherent blob");
-        
+
         let blob = &blobs[0];
-        assert_eq!(blob.size_in_chunks, 9, "The 3x3 pattern should result in 9 chunks");
-        
+        assert_eq!(
+            blob.size_in_chunks, 9,
+            "The 3x3 pattern should result in 9 chunks"
+        );
+
         // check bounds
         let (min_pt, max_pt) = blob.bounding_box;
         assert_eq!(min_pt.x, 4);
@@ -288,12 +291,16 @@ mod test {
         let mut status_map = vec![ChunkStatus::Stable; (width * height) as usize];
 
         status_map[(2 * width + 2) as usize] = mock_anomaly(10.0);
-        
+
         status_map[(15 * width + 15) as usize] = mock_anomaly(10.0);
 
         let blobs = find_blobs(&status_map, width, height);
 
-        assert_eq!(blobs.len(), 2, "Should have identified two distinct motion epicenters");
+        assert_eq!(
+            blobs.len(),
+            2,
+            "Should have identified two distinct motion epicenters"
+        );
     }
 
     fn generate_random_activity_map() -> (u32, u32, Vec<ChunkStatus>) {
@@ -309,10 +316,60 @@ mod test {
     fn test_blob_detector_stability_with_random_noise() {
         let (height, width, status_map) = generate_random_activity_map();
         let blobs = find_blobs(&status_map, width, height);
-        
+
         for blob in blobs {
             let (min, max) = blob.bounding_box;
             assert!(max.x < width && max.y < height);
         }
+    }
+
+    #[test]
+    fn test_grow_blob_complex_shape_and_center_of_mass() {
+        let width = 5;
+        let height = 5;
+        let mut heatmap = vec![vec![0.0; width]; height];
+        let mut status_map = vec![ChunkStatus::Stable; width * height];
+        let mut visited = vec![vec![false; width]; height];
+
+        // l-shaped blob: (1,1), (1,2), (2,2) w/ peak at (1,1)
+        let peak = Point { x: 1, y: 1 };
+
+        let shape = vec![(1, 1, 10.0), (1, 2, 5.0), (2, 2, 5.0)];
+
+        for (x, y, heat) in shape {
+            heatmap[y][x] = heat;
+            let idx = y * width + x;
+            status_map[idx] = ChunkStatus::AnomalousEvent(AnomalyDetails {
+                luminance_score: heat,
+                color_score: 1.0,
+                hue_score: 1.0,
+            });
+        }
+
+        // add an island of heat nearby thats unconnected
+        // search should ignore it, since its diagnol.
+        heatmap[0][0] = 10.0;
+
+        let blob = grow_blob_from_peak(peak, &heatmap, &mut visited, 0, &status_map, width as u32);
+        assert_eq!(
+            blob.size_in_chunks, 3,
+            "Blob should not leak into diagonal neighbors"
+        );
+
+        assert_eq!(blob.bounding_box.0.x, 1);
+        assert_eq!(blob.bounding_box.0.y, 1);
+        assert_eq!(blob.bounding_box.1.x, 2);
+        assert_eq!(blob.bounding_box.1.y, 2);
+
+        // heat_sum = 10 + 5 + 5 = 20
+        // x mass = (1*10) + (1*5) + (2*5) = 25 -> 25/20 = 1.25
+        // y mass = (1*10) + (2*5) + (2*5) = 30 -> 30/20 = 1.5
+        assert!((blob.center_of_mass.0 - 1.25).abs() < f64::EPSILON);
+        assert!((blob.center_of_mass.1 - 1.5).abs() < f64::EPSILON);
+
+        assert!(visited[1][1]);
+        assert!(visited[2][1]);
+        assert!(visited[2][2]);
+        assert!(!visited[0][0], "The island should remain unvisited");
     }
 }
