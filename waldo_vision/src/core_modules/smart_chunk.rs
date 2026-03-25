@@ -27,6 +27,9 @@ use crate::core_modules::smart_pixel::smart_pixel::{
 };
 use std::collections::VecDeque;
 
+use rand::distr::{Distribution, StandardUniform, Uniform};
+use rand::prelude::*;
+
 const HISTORY_WINDOW_SIZE: usize = 20;
 const ANOMALY_THRESHOLD_STD_DEV: f64 = 3.0;
 const STABLE_LUMINANCE_THRESHOLD: f64 = 2.0;
@@ -43,6 +46,18 @@ pub struct AnomalyDetails {
     pub hue_score: f64,
 }
 
+#[cfg(test)]
+impl Distribution<AnomalyDetails> for StandardUniform {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> AnomalyDetails {
+        let dist = Uniform::new(0.0, 256.0).unwrap();
+        AnomalyDetails {
+            luminance_score: dist.sample(rng),
+            color_score: dist.sample(rng),
+            hue_score: dist.sample(rng),
+        }
+    }
+}
+
 /// Represents the current state of a SmartChunk based on its temporal analysis.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChunkStatus {
@@ -54,6 +69,18 @@ pub enum ChunkStatus {
     PredictableMotion,
     /// The chunk's change is a statistical outlier from its learned behavior.
     AnomalousEvent(AnomalyDetails),
+}
+
+#[cfg(test)]
+impl Distribution<ChunkStatus> for StandardUniform {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> ChunkStatus {
+        match rng.random_range(0..=3) {
+            0 => ChunkStatus::Learning,
+            1 => ChunkStatus::Stable,
+            2 => ChunkStatus::PredictableMotion,
+            _ => ChunkStatus::AnomalousEvent(rng.sample(StandardUniform))
+        }
+    }
 }
 
 /// A stateful analyzer for a single chunk location in an image grid.
