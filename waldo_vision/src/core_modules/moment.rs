@@ -124,3 +124,71 @@ impl SceneManager {
         self.tracker.get_tracked_blobs()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core_modules::smart_blob::Point;
+    use crate::core_modules::smart_chunk::AnomalyDetails;
+
+    fn create_mock_config() -> PipelineConfig {
+        PipelineConfig {
+            image_width: 100,
+            image_height: 100,
+            chunk_width: 10,
+            chunk_height: 10,
+            new_age_threshold: 1, // Make it transition to Tracking fast
+            behavioral_anomaly_threshold: 3.0,
+            absolute_min_blob_size: 1,
+            blob_size_std_dev_filter: 2.0,
+            disturbance_entry_threshold: 5.0,
+            disturbance_exit_threshold: 2.0,
+            disturbance_confirmation_frames: 3,
+        }
+    }
+
+    fn create_mock_blob(id: u64, x: f64, y: f64) -> SmartBlob {
+        SmartBlob {
+            id,
+            bounding_box: (Point { x: 0, y: 0 }, Point { x: 1, y: 1 }),
+            chunk_coords: vec![],
+            size_in_chunks: 10,
+            average_anomaly: AnomalyDetails {
+                luminance_score: 5.0,
+                color_score: 5.0,
+                hue_score: 5.0,
+            },
+            center_of_mass: (x, y),
+        }
+    }
+
+    #[test]
+    fn test_scene_manager_lifecycle() {
+        let mut sm = SceneManager::new();
+        let config = create_mock_config();
+
+        let b1 = create_mock_blob(1, 10.0, 10.0);
+        let (started, _) = sm.update(vec![b1], &config);
+        assert_eq!(started.len(), 1);
+        assert_eq!(sm.active_moments.len(), 1);
+        let first_id = started[0].id;
+
+        let b2 = create_mock_blob(2, 10.5, 10.5);
+        let (started, completed) = sm.update(vec![b2], &config);
+        assert_eq!(started.len(), 0);
+        assert_eq!(completed.len(), 0);
+        assert_eq!(sm.active_moments.len(), 1);
+        assert_eq!(sm.active_moments[0].id, first_id);
+        assert_eq!(sm.active_moments[0].path.len(), 2);
+
+        for _ in 0..5 {
+            sm.update(vec![], &config);
+        }
+        let (started, completed) = sm.update(vec![], &config);
+        assert_eq!(started.len(), 0);
+        assert_eq!(completed.len(), 1);
+        assert_eq!(sm.active_moments.len(), 0);
+        assert_eq!(sm.completed_moments.len(), 1);
+        assert_eq!(completed[0].id, first_id);
+    }
+}
