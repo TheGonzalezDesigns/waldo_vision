@@ -86,19 +86,28 @@ impl TrackedBlob {
 
         update_history(&mut self.position_history, self.latest_blob.center_of_mass);
         update_history(&mut self.size_history, self.latest_blob.size_in_chunks);
-        update_history(&mut self.signature_history, self.latest_blob.average_anomaly.clone());
+        update_history(
+            &mut self.signature_history,
+            self.latest_blob.average_anomaly.clone(),
+        );
 
         if self.position_history.len() > 1 {
             let new_pos = self.position_history.back().unwrap();
-            let old_pos = self.position_history.get(self.position_history.len() - 2).unwrap();
+            let old_pos = self
+                .position_history
+                .get(self.position_history.len() - 2)
+                .unwrap();
             self.velocity = (new_pos.0 - old_pos.0, new_pos.1 - old_pos.1);
             update_history(&mut self.velocity_history, self.velocity);
         }
     }
-    
+
     fn predict_next_position(&self) -> (f64, f64) {
         let current_pos = self.latest_blob.center_of_mass;
-        (current_pos.0 + self.velocity.0, current_pos.1 + self.velocity.1)
+        (
+            current_pos.0 + self.velocity.0,
+            current_pos.1 + self.velocity.1,
+        )
     }
 }
 
@@ -122,7 +131,11 @@ impl Tracker {
         }
     }
 
-    pub fn update(&mut self, new_blobs: Vec<SmartBlob>, config: &PipelineConfig) -> &Vec<TrackedBlob> {
+    pub fn update(
+        &mut self,
+        new_blobs: Vec<SmartBlob>,
+        config: &PipelineConfig,
+    ) -> &Vec<TrackedBlob> {
         let coherent_blobs = self.merge_fragmented_blobs(new_blobs);
         let (matches, unmatched_blobs_map) = self.match_blobs(coherent_blobs);
         let mut unmatched_blobs = unmatched_blobs_map;
@@ -165,7 +178,10 @@ impl Tracker {
         blobs // Placeholder for future enhancement
     }
 
-    fn match_blobs(&self, blobs: Vec<SmartBlob>) -> (Vec<(usize, usize)>, HashMap<usize, SmartBlob>) {
+    fn match_blobs(
+        &self,
+        blobs: Vec<SmartBlob>,
+    ) -> (Vec<(usize, usize)>, HashMap<usize, SmartBlob>) {
         let mut matches = Vec::new();
         let unmatched_blobs: HashMap<usize, SmartBlob> = blobs.into_iter().enumerate().collect();
         let mut used_blob_indices = HashSet::new();
@@ -175,8 +191,11 @@ impl Tracker {
             let mut best_match: Option<(usize, f64)> = None;
 
             for (j, new_blob) in &unmatched_blobs {
-                if used_blob_indices.contains(j) { continue; }
-                let dist_sq = (predicted_pos.0 - new_blob.center_of_mass.0).powi(2) + (predicted_pos.1 - new_blob.center_of_mass.1).powi(2);
+                if used_blob_indices.contains(j) {
+                    continue;
+                }
+                let dist_sq = (predicted_pos.0 - new_blob.center_of_mass.0).powi(2)
+                    + (predicted_pos.1 - new_blob.center_of_mass.1).powi(2);
                 let dist = dist_sq.sqrt();
                 if dist < DISTANCE_THRESHOLD {
                     if best_match.is_none() || dist < best_match.as_ref().unwrap().1 {
@@ -218,29 +237,46 @@ impl Tracker {
 // --- Behavioral Anomaly Detection Helpers ---
 
 fn is_acceleration_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
-    if blob.velocity_history.len() < HISTORY_SIZE / 2 { return false; }
+    if blob.velocity_history.len() < HISTORY_SIZE / 2 {
+        return false;
+    }
     let (mean_vx, std_dev_vx) = calculate_vector_stats(&blob.velocity_history, |v| v.0);
     let (mean_vy, std_dev_vy) = calculate_vector_stats(&blob.velocity_history, |v| v.1);
-    
+
     let z_score_x = (blob.velocity.0 - mean_vx) / std_dev_vx.max(0.01);
     let z_score_y = (blob.velocity.1 - mean_vy) / std_dev_vy.max(0.01);
 
-    z_score_x.abs() > config.behavioral_anomaly_threshold || z_score_y.abs() > config.behavioral_anomaly_threshold
+    z_score_x.abs() > config.behavioral_anomaly_threshold
+        || z_score_y.abs() > config.behavioral_anomaly_threshold
 }
 
 fn is_size_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
-    if blob.size_history.len() < HISTORY_SIZE / 2 { return false; }
-    let size_changes: Vec<f64> = blob.size_history.as_slices().0.windows(2).map(|w| (w[1] as f64 - w[0] as f64)).collect();
-    if size_changes.is_empty() { return false; }
+    if blob.size_history.len() < HISTORY_SIZE / 2 {
+        return false;
+    }
+    let size_changes: Vec<f64> = blob
+        .size_history
+        .as_slices()
+        .0
+        .windows(2)
+        .map(|w| w[1] as f64 - w[0] as f64)
+        .collect();
+    if size_changes.is_empty() {
+        return false;
+    }
 
     let (mean, std_dev) = calculate_scalar_stats(&size_changes);
-    let current_change = (blob.size_history.back().unwrap() - blob.size_history.get(blob.size_history.len() - 2).unwrap()) as f64;
+    let current_change = (blob.size_history.back().unwrap()
+        - blob.size_history.get(blob.size_history.len() - 2).unwrap())
+        as f64;
 
     (current_change - mean) / std_dev.max(0.01) > config.behavioral_anomaly_threshold
 }
 
 fn is_hue_change_anomalous(blob: &TrackedBlob, config: &PipelineConfig) -> bool {
-    if blob.signature_history.len() < HISTORY_SIZE / 2 { return false; }
+    if blob.signature_history.len() < HISTORY_SIZE / 2 {
+        return false;
+    }
     let hue_scores: Vec<f64> = blob.signature_history.iter().map(|s| s.hue_score).collect();
     let (mean, std_dev) = calculate_scalar_stats(&hue_scores);
     let current_hue = blob.latest_blob.average_anomaly.hue_score;
@@ -256,7 +292,107 @@ fn calculate_scalar_stats(data: &[f64]) -> (f64, f64) {
 }
 
 fn calculate_vector_stats<F>(data: &VecDeque<(f64, f64)>, accessor: F) -> (f64, f64)
-where F: Fn(&(f64, f64)) -> f64 {
+where
+    F: Fn(&(f64, f64)) -> f64,
+{
     let values: Vec<f64> = data.iter().map(accessor).collect();
     calculate_scalar_stats(&values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core_modules::smart_blob::Point;
+
+    fn create_mock_config() -> PipelineConfig {
+        PipelineConfig {
+            image_width: 100,
+            image_height: 100,
+            chunk_width: 10,
+            chunk_height: 10,
+            new_age_threshold: 5,
+            behavioral_anomaly_threshold: 3.0,
+            absolute_min_blob_size: 1,
+            blob_size_std_dev_filter: 2.0,
+            disturbance_entry_threshold: 5.0,
+            disturbance_exit_threshold: 2.0,
+            disturbance_confirmation_frames: 3,
+        }
+    }
+
+    fn create_mock_blob(id: u64, x: f64, y: f64) -> SmartBlob {
+        SmartBlob {
+            id,
+            bounding_box: (Point { x: 0, y: 0 }, Point { x: 1, y: 1 }),
+            chunk_coords: vec![],
+            size_in_chunks: 10,
+            average_anomaly: AnomalyDetails {
+                luminance_score: 5.0,
+                color_score: 5.0,
+                hue_score: 5.0,
+            },
+            center_of_mass: (x, y),
+        }
+    }
+
+    #[test]
+    fn test_tracked_blob_lifecycle() {
+        let blob = create_mock_blob(1, 10.0, 10.0);
+        let mut tracked = TrackedBlob::new(100, blob);
+        assert_eq!(tracked.state, TrackedState::New);
+
+        // Move it
+        let blob2 = create_mock_blob(2, 11.0, 11.0);
+        tracked.update(blob2);
+        assert_eq!(tracked.velocity, (1.0, 1.0));
+        assert_eq!(tracked.age, 2);
+    }
+
+    #[test]
+    fn test_tracker_update() {
+        let mut tracker = Tracker::new();
+        let config = create_mock_config();
+
+        let blob1 = create_mock_blob(1, 10.0, 10.0);
+        let tracked = tracker.update(vec![blob1], &config);
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].state, TrackedState::New);
+        let first_id = tracked[0].id;
+
+        let blob2 = create_mock_blob(2, 10.5, 10.5);
+        let tracked = tracker.update(vec![blob2], &config);
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].id, first_id);
+        assert_eq!(tracked[0].velocity, (0.5, 0.5));
+
+        let tracked = tracker.update(vec![], &config);
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].state, TrackedState::Lost);
+        assert_eq!(tracked[0].frames_since_seen, 1);
+
+        let blob3 = create_mock_blob(3, 11.0, 11.0);
+        let tracked = tracker.update(vec![blob3], &config);
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].id, first_id);
+        assert_eq!(tracked[0].state, TrackedState::New); // age still < threshold
+    }
+
+    #[test]
+    fn test_tracker_multiple_blobs() {
+        let mut tracker = Tracker::new();
+        let config = create_mock_config();
+
+        let b1 = create_mock_blob(1, 10.0, 10.0);
+        let b2 = create_mock_blob(2, 50.0, 50.0);
+        let tracked = tracker.update(vec![b1, b2], &config);
+        assert_eq!(tracked.len(), 2);
+
+        // Swap positions (too far to match)
+        let b3 = create_mock_blob(3, 50.0, 50.0);
+        let b4 = create_mock_blob(4, 10.0, 10.0);
+        let tracked = tracker.update(vec![b3, b4], &config);
+        assert_eq!(tracked.len(), 2);
+        // They should still match based on distance because 10.0 and 50.0 are far apart
+        // and they are close to their previous positions.
+    }
 }

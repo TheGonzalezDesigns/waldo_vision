@@ -93,4 +93,78 @@ pub mod pixel {
             vec![pixel.red, pixel.green, pixel.blue, pixel.alpha]
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_pixel_new() {
+            let pixel = Pixel::new(10, 20, 30, 40);
+            assert_eq!(pixel.red, 10);
+            assert_eq!(pixel.green, 20);
+            assert_eq!(pixel.blue, 30);
+            assert_eq!(pixel.alpha, 40);
+        }
+
+        #[test]
+        fn test_pixel_default() {
+            let pixel = Pixel::default();
+            assert_eq!(pixel.red, 0);
+            assert_eq!(pixel.green, 0);
+            assert_eq!(pixel.blue, 0);
+            assert_eq!(pixel.alpha, 0);
+        }
+
+        #[test]
+        fn test_pixel_luminance() {
+            let pixel = Pixel::new(255, 255, 255, 255);
+            assert!((pixel.luminance() - 255.0).abs() < 1e-6);
+
+            let black = Pixel::new(0, 0, 0, 255);
+            assert_eq!(black.luminance(), 0.0);
+
+            let red = Pixel::new(255, 0, 0, 255);
+            assert!((red.luminance() - 76.245).abs() < 1e-3);
+        }
+
+        #[test]
+        fn test_pixel_sum() {
+            let pixel = Pixel::new(10, 20, 30, 255);
+            assert_eq!(pixel.sum(), 60.0);
+        }
+
+        #[test]
+        fn test_pixel_color_ratios() {
+            let pixel = Pixel::new(100, 100, 200, 255);
+            let (r, g, b) = pixel.color_ratios();
+            assert!((r - 0.25f32).abs() < 1e-6);
+            assert!((g - 0.25f32).abs() < 1e-6);
+            assert!((b - 0.50f32).abs() < 1e-6);
+
+            let black = Pixel::new(0, 0, 0, 255);
+            assert_eq!(black.color_ratios(), (0.0, 0.0, 0.0));
+        }
+
+        #[test]
+        fn test_pixel_from_bytes() {
+            let bytes = [10, 20, 30, 40];
+            let pixel = Pixel::from(&bytes[..]);
+            assert_eq!(pixel, Pixel::new(10, 20, 30, 40));
+        }
+
+        #[test]
+        #[should_panic(expected = "Cannot convert 3 bytes into pixel.")]
+        fn test_pixel_from_bytes_panic() {
+            let bytes = [10, 20, 30];
+            let _ = Pixel::from(&bytes[..]);
+        }
+
+        #[test]
+        fn test_bytes_from_pixel() {
+            let pixel = Pixel::new(10, 20, 30, 40);
+            let bytes: Bytes = pixel.into();
+            assert_eq!(bytes, vec![10, 20, 30, 40]);
+        }
+    }
 }
